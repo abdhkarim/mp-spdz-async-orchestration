@@ -29,6 +29,7 @@ Notre contribution consiste à :
 
 ## Structure du projet
 
+```bash
 common/        → types, messages, crypto partagés
 node/          → nœud MPC (phase asynchrone + lancement MP-SPDZ)
 consensus/     → service central de décision du core set
@@ -39,7 +40,7 @@ scripts/       → scripts utilitaires (setup, démo, crashs)
 docs/          → documentation du protocole et de l’architecture
 tests/         → tests unitaires
 third_party/   → dépendances externes (MP-SPDZ en submodule)
-
+```
 ---
 
 ## Flux global
