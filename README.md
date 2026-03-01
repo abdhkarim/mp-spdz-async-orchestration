@@ -16,7 +16,7 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 - Illustrer les difficultés d’intégration MP-SPDZ (offline/online, fichiers, lancement).
 
 ## Architecture
-
+![Architecture hybride MPC avec core set](./others/architecture.png)
 ### `node/` (data providers)
 - Exécutable `data_provider`.
 - Écrit un fichier `inputs/provider_<id>.txt`.
@@ -43,6 +43,46 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 - Lit `N` entrées secrètes (`N = taille du core set`).
 - Calcule la somme.
 - Révèle `SUM=<résultat>`.
+
+## Correspondance avec l'architecture (Zone 1 / 2 / 3)
+
+Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-Side MPC avec Consensus (Core Set)".
+
+### Zone 1 : Data Providers (asynchrone / instable)
+
+- Composant : `node/src/data_provider.cpp`
+- Exécutable : `./build/node/data_provider <id> <value> [--malformed]`
+- Rôle :
+  - envoi d'une contribution individuelle,
+  - crash simulé si le provider n'est pas lancé,
+  - comportement malveillant simulé via `--malformed`.
+- Trace concrète : fichiers `inputs/provider_<id>.txt`.
+
+### Zone 2 : Arbitre / Consensus (frontière de synchronisation)
+
+- Composant : `consensus/src/consensus.cpp`
+- Exécutable : `./build/consensus/consensus [timeout_seconds]`
+- Rôle :
+  - attend la fenêtre de collecte (timeout),
+  - valide le format des preuves/entrées reçues,
+  - exclut les entrées absentes ou invalides,
+  - décide le `core set`.
+- Trace concrète : fichier `core_set.txt` (un identifiant valide par ligne).
+
+### Zone 3 : Computation Nodes (synchrone / stable)
+
+- Composants :
+  - `spdz_bridge/src/spdz_bridge.cpp`
+  - `programs/sum.mpc`
+  - runtime MP-SPDZ dans `third_party/MP-SPDZ`
+- Rôle :
+  - conversion du core set en parties MP-SPDZ actives,
+  - préparation des fichiers `Player-Data/Input-P*-0`,
+  - compilation/exécution du programme MPC,
+  - calcul synchrone sur les seules parties retenues.
+- Trace concrète :
+  - logs d'exécution,
+  - sortie `SUM=<valeur>`.
 
 ## Arborescence
 
