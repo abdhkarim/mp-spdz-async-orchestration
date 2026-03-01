@@ -17,33 +17,6 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 
 ## Architecture
 ![Architecture hybride MPC avec core set](./others/architecture.png)
-### `node/` (data providers)
-- Exécutable `data_provider`.
-- Écrit un fichier `inputs/provider_<id>.txt`.
-- Format valide attendu :
-  - `id=<id>`
-  - `value=<valeur>`
-
-### `consensus/`
-- Exécutable `consensus`.
-- Attend un timeout fixe.
-- Lit `inputs/`, valide les fichiers.
-- Exclut les fichiers mal formés.
-- Écrit `core_set.txt` (un id par ligne).
-
-### `spdz_bridge/`
-- Exécutable `spdz_bridge`.
-- Lit `core_set.txt`.
-- Génère les entrées MP-SPDZ dans `third_party/MP-SPDZ/Player-Data/Input-P*-0`.
-- Compile `programs/sum.mpc`.
-- Tente de lancer MP-SPDZ online.
-- En cas d’échec runtime, affiche une somme de fallback calculée localement.
-
-### `programs/sum.mpc`
-- Lit `N` entrées secrètes (`N = taille du core set`).
-- Calcule la somme.
-- Révèle `SUM=<résultat>`.
-
 ## Correspondance avec l'architecture (Zone 1 / 2 / 3)
 
 Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-Side MPC avec Consensus (Core Set)".
@@ -84,16 +57,78 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
   - logs d'exécution,
   - sortie `SUM=<valeur>`.
 
+  ### `node/` (data providers)
+- Exécutable `data_provider`.
+- Écrit un fichier `inputs/provider_<id>.txt`.
+- Format valide attendu :
+  - `id=<id>`
+  - `value=<valeur>`
+
+### `consensus/`
+- Exécutable `consensus`.
+- Attend un timeout fixe.
+- Lit `inputs/`, valide les fichiers.
+- Exclut les fichiers mal formés.
+- Écrit `core_set.txt` (un id par ligne).
+
+### `spdz_bridge/`
+- Exécutable `spdz_bridge`.
+- Lit `core_set.txt`.
+- Génère les entrées MP-SPDZ dans `third_party/MP-SPDZ/Player-Data/Input-P*-0`.
+- Compile `programs/sum.mpc`.
+- Tente de lancer MP-SPDZ online.
+- En cas d’échec runtime, affiche une somme de fallback calculée localement.
+
+### `programs/sum.mpc`
+- Lit `N` entrées secrètes (`N = taille du core set`).
+- Calcule la somme.
+- Révèle `SUM=<résultat>`.
+
+
 ## Arborescence
 
 ```text
-common/        code partagé C++
-node/          data providers
-consensus/     décision du core set
-spdz_bridge/   interface vers MP-SPDZ
-programs/      programmes MPC (.mpc)
-docs/          documentation
-third_party/   MP-SPDZ (submodule, non modifié)
+mp-spdz-async-orchestration/ (racine du projet)
+├── core_set.txt (sortie du consensus, généré à l'exécution)
+├── common/ (code C++ partagé)
+│   ├── CMakeLists.txt (build du module common)
+│   ├── include/common/ (headers partagés: types/messages/api)
+│   └── src/ (implémentations utilitaires/stubs)
+├── node/ (Zone 1: data providers)
+│   ├── CMakeLists.txt (build de data_provider)
+│   ├── include/node/ (headers du module)
+│   └── src/
+│       └── data_provider.cpp (écrit inputs/provider_<id>.txt)
+├── consensus/ (Zone 2: arbitre / décision du core set)
+│   ├── CMakeLists.txt (build de consensus)
+│   ├── include/consensus/ (headers du module)
+│   └── src/
+│       └── consensus.cpp (timeout + validation + génération core_set.txt)
+├── spdz_bridge/ (Zone 3: interface vers MP-SPDZ)
+│   ├── CMakeLists.txt (build de spdz_bridge)
+│   ├── include/spdz_bridge/ (headers du module)
+│   └── src/
+│       └── spdz_bridge.cpp (prépare Input-P* + compile/run MP-SPDZ)
+├── programs/ (programmes MPC)
+│   ├── sum.mpc (programme principal: somme des entrées)
+│   └── sanity_sum.mpc (fichier de sanity-check/réserve)
+├── docs/ (docs architecture/protocole/threat model)
+├── tests/ (tests unitaires du prototype)
+│   └── CMakeLists.txt (cible de tests)
+├── configs/ (fichiers de configuration de démo)
+├── scripts/ (scripts utilitaires du projet)
+├── others/ (assets annexes)
+│   └── architecture.png (image utilisée dans le README)
+├── third_party/ (dépendances externes)
+│   └── MP-SPDZ/ (sous-module MP-SPDZ non modifié)
+├── build/ (artefacts de compilation CMake, généré)
+│   ├── node/data_provider (binaire provider)
+│   ├── consensus/consensus (binaire consensus)
+│   └── spdz_bridge/spdz_bridge (binaire bridge)
+├── inputs/ (entrées providers, généré pendant la démo)
+│   └── provider_<id>.txt (valeur d'un provider)
+└── logs/ (logs d'exécution bridge, généré)
+    └── player_<party>.log (sortie de chaque partie MP-SPDZ)
 ```
 
 ## Prérequis
