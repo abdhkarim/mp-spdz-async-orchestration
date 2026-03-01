@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <regex>
+#include <sodium.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -15,6 +17,8 @@ namespace fs = std::filesystem;
 struct ProviderInput {
     int id = -1;
     long long value = 0;
+    std::string nonce;
+    std::string proof;
 };
 
 // Parse un entier strict (la chaîne entière doit être numérique).
@@ -31,10 +35,41 @@ std::optional<long long> parse_integer(const std::string& s) {
     }
 }
 
+std::string to_hex(const unsigned char* data, size_t len) {
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.reserve(len * 2);
+    for (size_t i = 0; i < len; ++i) {
+        out.push_back(kHex[(data[i] >> 4) & 0x0F]);
+        out.push_back(kHex[data[i] & 0x0F]);
+    }
+    return out;
+}
+
+std::string compute_proof(const std::string& id,
+                          const std::string& value,
+                          const std::string& nonce,
+                          const std::string& secret) {
+    const std::string message = "id=" + id + ";value=" + value + ";nonce=" + nonce;
+    unsigned char digest[crypto_generichash_BYTES] = {0};
+    crypto_generichash_state state;
+    crypto_generichash_init(&state,
+                            reinterpret_cast<const unsigned char*>(secret.data()),
+                            secret.size(),
+                            sizeof(digest));
+    crypto_generichash_update(&state,
+                              reinterpret_cast<const unsigned char*>(message.data()),
+                              message.size());
+    crypto_generichash_final(&state, digest, sizeof(digest));
+    return to_hex(digest, sizeof(digest));
+}
+
 // Parse un fichier provider au format strict :
 //   id=<entier>
 //   value=<entier>
-// Toute ligne supplémentaire rend le fichier invalide.
+//   nonce=<hex>
+//   proof=<hex blake2b clé-partagée>
+// Toute ligne manquante ou supplémentaire rend le fichier invalide.
 std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     std::ifstream in(path);
     if (!in.is_open()) {
@@ -43,8 +78,11 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
 
     std::string line1;
     std::string line2;
+    std::string line3;
+    std::string line4;
     std::string extra;
-    if (!std::getline(in, line1) || !std::getline(in, line2)) {
+    if (!std::getline(in, line1) || !std::getline(in, line2) ||
+        !std::getline(in, line3) || !std::getline(in, line4)) {
         return std::nullopt;
     }
     if (std::getline(in, extra)) {
@@ -53,7 +91,10 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
 
     const std::string id_prefix = "id=";
     const std::string value_prefix = "value=";
-    if (line1.rfind(id_prefix, 0) != 0 || line2.rfind(value_prefix, 0) != 0) {
+    const std::string nonce_prefix = "nonce=";
+    const std::string proof_prefix = "proof=";
+    if (line1.rfind(id_prefix, 0) != 0 || line2.rfind(value_prefix, 0) != 0 ||
+        line3.rfind(nonce_prefix, 0) != 0 || line4.rfind(proof_prefix, 0) != 0) {
         return std::nullopt;
     }
 
@@ -66,10 +107,24 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     ProviderInput parsed;
     parsed.id = static_cast<int>(*id);
     parsed.value = *value;
+    parsed.nonce = line3.substr(nonce_prefix.size());
+    parsed.proof = line4.substr(proof_prefix.size());
     return parsed;
 }
 
 int main(int argc, char* argv[]) {
+    if (sodium_init() < 0) {
+        std::cerr << "Failed to initialize libsodium\n";
+        return 1;
+    }
+    const std::string secret = []() {
+        const char* env = std::getenv("MPC_PROVIDER_SECRET");
+        if (env && *env) {
+            return std::string(env);
+        }
+        return std::string("mpc-demo-secret");
+    }();
+
     // Timeout configurable pour simuler une fenêtre de collecte fixe.
     int timeout_seconds = 10;
     if (argc == 2) {
@@ -117,6 +172,13 @@ int main(int argc, char* argv[]) {
             if (!parsed || parsed->id != *parsed_file_id) {
                 // Un fichier mal formé ou incohérent est traité comme participant invalide.
                 std::cout << "Ignoring malformed provider file: " << entry.path() << "\n";
+                continue;
+            }
+            const std::string expected_proof = compute_proof(
+                std::to_string(parsed->id), std::to_string(parsed->value), parsed->nonce, secret);
+            if (expected_proof != parsed->proof) {
+                std::cout << "Ignoring provider file with invalid cryptographic proof: "
+                          << entry.path() << "\n";
                 continue;
             }
 

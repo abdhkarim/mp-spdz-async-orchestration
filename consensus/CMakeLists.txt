@@ -11,6 +11,8 @@ target_link_libraries(consensus
   PRIVATE
     # Réutilise les types partagés (common).
     common
+    # Vérification des preuves cryptographiques BLAKE2b.
+    PkgConfig::SODIUM
 )
 
 target_compile_options(consensus PRIVATE -Wall -Wextra -Wpedantic)

@@ -96,6 +96,7 @@ data_provider_EXTERNAL_OBJECTS =
 node/data_provider: node/CMakeFiles/data_provider.dir/src/data_provider.cpp.o
 node/data_provider: node/CMakeFiles/data_provider.dir/build.make
 node/data_provider: common/libcommon.a
+node/data_provider: /opt/homebrew/Cellar/libsodium/1.0.20/lib/libsodium.dylib
 node/data_provider: node/CMakeFiles/data_provider.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable data_provider"
 	cd /Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/build/node && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/data_provider.dir/link.txt --verbose=$(VERBOSE)

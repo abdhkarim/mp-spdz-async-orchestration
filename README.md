@@ -57,17 +57,21 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
   - logs d'exécution,
   - sortie `SUM=<valeur>`.
 
-  ### `node/` (data providers)
+### `node/` (data providers)
 - Exécutable `data_provider`.
 - Écrit un fichier `inputs/provider_<id>.txt`.
-- Format valide attendu :
+- Format signé attendu :
   - `id=<id>`
   - `value=<valeur>`
+  - `nonce=<hex>`
+  - `proof=<blake2b_hex>`
+- La preuve est calculée avec une clé partagée (`MPC_PROVIDER_SECRET`).
 
 ### `consensus/`
 - Exécutable `consensus`.
 - Attend un timeout fixe.
 - Lit `inputs/`, valide les fichiers.
+- Vérifie la preuve cryptographique (`proof`) pour chaque entrée.
 - Exclut les fichiers mal formés.
 - Écrit `core_set.txt` (un id par ligne).
 
@@ -134,6 +138,7 @@ mp-spdz-async-orchestration/ (racine du projet)
 ## Prérequis
 
 - macOS/Linux avec CMake et compilateur C++20.
+- `libsodium` (utilisé pour la preuve cryptographique BLAKE2b).
 - MP-SPDZ présent dans `third_party/MP-SPDZ`.
 - Pour l’exécution complète MP-SPDZ (offline+online) :
   - `Player-Online.x`
@@ -154,6 +159,10 @@ cmake --build build -j4
 Depuis la racine du projet :
 
 ```bash
+# Optionnel: fixer la même clé partagée côté providers et consensus
+# (sinon la valeur par défaut "mpc-demo-secret" est utilisée partout)
+export MPC_PROVIDER_SECRET="mpc-demo-secret"
+
 rm -rf inputs core_set.txt logs
 
 # providers valides

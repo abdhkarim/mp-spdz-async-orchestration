@@ -1,2 +1,4 @@
 id=1
 value=7
+nonce=f4104ef6b3029f598df340f4642dbf91
+proof=a47aa020f6cb2cf2f9ebb688ab5a604cacb0b191c5bc3974ff040c169ef33e01

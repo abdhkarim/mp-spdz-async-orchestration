@@ -11,6 +11,8 @@ target_link_libraries(data_provider
   PRIVATE
     # Accès aux types/messages partagés.
     common
+    # Hash BLAKE2b pour la preuve cryptographique.
+    PkgConfig::SODIUM
 )
 
 target_compile_options(data_provider PRIVATE -Wall -Wextra -Wpedantic)

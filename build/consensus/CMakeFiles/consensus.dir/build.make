@@ -96,6 +96,7 @@ consensus_EXTERNAL_OBJECTS =
 consensus/consensus: consensus/CMakeFiles/consensus.dir/src/consensus.cpp.o
 consensus/consensus: consensus/CMakeFiles/consensus.dir/build.make
 consensus/consensus: common/libcommon.a
+consensus/consensus: /opt/homebrew/Cellar/libsodium/1.0.20/lib/libsodium.dylib
 consensus/consensus: consensus/CMakeFiles/consensus.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable consensus"
 	cd /Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/build/consensus && $(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/consensus.dir/link.txt --verbose=$(VERBOSE)

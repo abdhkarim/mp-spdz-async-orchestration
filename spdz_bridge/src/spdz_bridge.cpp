@@ -55,8 +55,18 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
 
     std::string line1;
     std::string line2;
+    std::string line3;
+    std::string line4;
     std::string extra;
     if (!std::getline(in, line1) || !std::getline(in, line2)) {
+        return std::nullopt;
+    }
+    // Compatibilité :
+    // - ancien format: 2 lignes (id, value)
+    // - nouveau format: 4 lignes (id, value, nonce, proof)
+    const bool has_line3 = static_cast<bool>(std::getline(in, line3));
+    const bool has_line4 = has_line3 && static_cast<bool>(std::getline(in, line4));
+    if (has_line3 != has_line4) {
         return std::nullopt;
     }
     if (std::getline(in, extra)) {
@@ -73,6 +83,14 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     const auto value = parse_integer(line2.substr(value_prefix.size()));
     if (!id || !value) {
         return std::nullopt;
+    }
+
+    if (has_line3) {
+        const std::string nonce_prefix = "nonce=";
+        const std::string proof_prefix = "proof=";
+        if (line3.rfind(nonce_prefix, 0) != 0 || line4.rfind(proof_prefix, 0) != 0) {
+            return std::nullopt;
+        }
     }
 
     ProviderInput parsed;
