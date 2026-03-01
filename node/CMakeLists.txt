@@ -1,21 +1,13 @@
-add_executable(mpc_node
-  src/main.cpp
-  src/node.cpp
-  src/transport_http.cpp
-  src/prephase.cpp
-  src/share_store.cpp
-  src/crash_sim.cpp
-  src/mp_spdz_runner.cpp
-)
+add_executable(data_provider src/data_provider.cpp)
 
-target_include_directories(mpc_node
+target_include_directories(data_provider
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(mpc_node
+target_link_libraries(data_provider
   PRIVATE
     common
 )
 
-target_compile_options(mpc_node PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(data_provider PRIVATE -Wall -Wextra -Wpedantic)

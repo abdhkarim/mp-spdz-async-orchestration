@@ -1,0 +1,10 @@
+if len(program.args) < 2:
+    raise Exception("Usage: sum <num_parties>")
+
+n = int(program.args[1])
+total = sint(0)
+
+for i in range(n):
+    total += sint.get_input_from(i)
+
+print_ln("SUM=%s", total.reveal())

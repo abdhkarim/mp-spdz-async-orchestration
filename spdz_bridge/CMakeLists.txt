@@ -1,16 +1,12 @@
-add_library(spdz_bridge STATIC
-  src/playersdata.cpp
-  src/spdz_paths.cpp
-  src/compile_program.cpp
-)
+add_executable(spdz_bridge src/spdz_bridge.cpp)
 
 target_include_directories(spdz_bridge
-  PUBLIC
+  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(spdz_bridge
-  PUBLIC
+  PRIVATE
     common
 )
 
