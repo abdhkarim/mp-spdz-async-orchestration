@@ -1,15 +1,18 @@
 #include "common/crypto.hpp"
 
 /*
- * Implémentation à venir :
- * - hash (BLAKE2b)
- * - signature Ed25519
+ * NOTE IMPORTANTE :
+ * Ce module reste volontairement un stub dans ce prototype.
  *
- * Pour l’instant : stub pour que le projet compile.
+ * Raison :
+ * - La démonstration actuelle se concentre sur le flux
+ *   data_provider -> consensus -> bridge MP-SPDZ.
+ * - Les primitives crypto seront branchées plus tard
+ *   (hash/signature/verification) sans casser l'API.
  */
 
 namespace crypto {
 
-// TODO: implémenter les fonctions crypto
+// TODO(phase suivante) : implémenter les fonctions déclarées dans crypto.hpp.
 
 }

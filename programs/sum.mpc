@@ -1,10 +1,17 @@
+# Programme MPC minimal pour la démonstration :
+# - argument attendu : nombre de parties actives (taille du core set),
+# - une entrée secrète par partie,
+# - sortie publique de la somme.
 if len(program.args) < 2:
     raise Exception("Usage: sum <num_parties>")
 
 n = int(program.args[1])
 total = sint(0)
 
+# On utilise une boucle Python (compile-time), car n est fourni à la compilation.
 for i in range(n):
+    # Lecture d'une valeur secrète depuis le fichier Input-P<i>-0.
     total += sint.get_input_from(i)
 
+# Convention de parsing côté bridge : rechercher la forme "SUM=<entier>".
 print_ln("SUM=%s", total.reveal())

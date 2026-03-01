@@ -6,7 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/consensus/include -I/Users/etudiant/Desktop/Ecole/MasterFSI/Semestre2/PFE/mp-spdz-async-orchestration/common/include
 
-CXX_FLAGSarm64 = -std=c++20 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk -Wall -Wextra -Wpedantic
-
-CXX_FLAGS = -std=c++20 -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk -Wall -Wextra -Wpedantic
+CXX_FLAGS = -std=c++20 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk -Wall -Wextra -Wpedantic
 

@@ -11,11 +11,13 @@
 
 namespace fs = std::filesystem;
 
+// Représente une entrée provider déjà validée syntaxiquement.
 struct ProviderInput {
     int id = -1;
     long long value = 0;
 };
 
+// Parse un entier strict (la chaîne entière doit être numérique).
 std::optional<long long> parse_integer(const std::string& s) {
     try {
         size_t idx = 0;
@@ -29,6 +31,10 @@ std::optional<long long> parse_integer(const std::string& s) {
     }
 }
 
+// Parse un fichier provider au format strict :
+//   id=<entier>
+//   value=<entier>
+// Toute ligne supplémentaire rend le fichier invalide.
 std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     std::ifstream in(path);
     if (!in.is_open()) {
@@ -64,6 +70,7 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
 }
 
 int main(int argc, char* argv[]) {
+    // Timeout configurable pour simuler une fenêtre de collecte fixe.
     int timeout_seconds = 10;
     if (argc == 2) {
         const auto parsed_timeout = parse_integer(argv[1]);
@@ -77,6 +84,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Simule un consensus "attend puis tranche".
     std::cout << "Consensus waiting " << timeout_seconds << " seconds for provider inputs...\n";
     std::this_thread::sleep_for(std::chrono::seconds(timeout_seconds));
 
@@ -87,6 +95,7 @@ int main(int argc, char* argv[]) {
     if (!fs::exists(inputs_dir)) {
         std::cout << "Inputs directory not found. Writing empty core set.\n";
     } else {
+        // On n'analyse que les noms de fichiers conformes à provider_<id>.txt.
         const std::regex filename_regex(R"(provider_(\d+)\.txt)");
         for (const auto& entry : fs::directory_iterator(inputs_dir)) {
             if (!entry.is_regular_file()) {
@@ -106,6 +115,7 @@ int main(int argc, char* argv[]) {
 
             const auto parsed = parse_provider_file(entry.path());
             if (!parsed || parsed->id != *parsed_file_id) {
+                // Un fichier mal formé ou incohérent est traité comme participant invalide.
                 std::cout << "Ignoring malformed provider file: " << entry.path() << "\n";
                 continue;
             }
@@ -114,6 +124,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Déduplication défensive (utile si un même id apparaît plusieurs fois).
     std::sort(core_set_ids.begin(), core_set_ids.end());
     core_set_ids.erase(std::unique(core_set_ids.begin(), core_set_ids.end()), core_set_ids.end());
 
@@ -124,6 +135,7 @@ int main(int argc, char* argv[]) {
     }
 
     for (const int id : core_set_ids) {
+        // Le core set est écrit dans un format simple : un id par ligne.
         out << id << "\n";
     }
 

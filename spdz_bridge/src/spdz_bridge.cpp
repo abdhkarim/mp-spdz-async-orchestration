@@ -12,11 +12,13 @@
 
 namespace fs = std::filesystem;
 
+// Entrée validée d'un provider retenu pour le core set.
 struct ProviderInput {
     int id = -1;
     long long value = 0;
 };
 
+// Protège une chaîne pour un usage sûr dans une commande shell.
 std::string quote_shell(const std::string& s) {
     std::string out = "'";
     for (const char c : s) {
@@ -30,6 +32,7 @@ std::string quote_shell(const std::string& s) {
     return out;
 }
 
+// Parse strict d'entier ; rejette les chaînes partiellement numériques.
 std::optional<long long> parse_integer(const std::string& s) {
     try {
         size_t idx = 0;
@@ -43,6 +46,7 @@ std::optional<long long> parse_integer(const std::string& s) {
     }
 }
 
+// Parse strict d'un fichier provider (même format que dans consensus).
 std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     std::ifstream in(path);
     if (!in.is_open()) {
@@ -77,6 +81,7 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     return parsed;
 }
 
+// Exécute une commande shell et normalise son code de retour.
 int run_shell_command(const std::string& cmd) {
     const int rc = std::system(cmd.c_str());
     if (rc == -1) {
@@ -90,6 +95,7 @@ int run_shell_command(const std::string& cmd) {
     return rc;
 }
 
+// Lit core_set.txt (un identifiant par ligne), puis trie/déduplique.
 std::vector<int> read_core_set(const fs::path& core_set_path) {
     std::vector<int> ids;
     std::ifstream in(core_set_path);
@@ -111,6 +117,7 @@ std::vector<int> read_core_set(const fs::path& core_set_path) {
     return ids;
 }
 
+// Extrait "SUM=<valeur>" depuis un log MP-SPDZ.
 std::optional<std::string> read_sum_from_log(const fs::path& log_path) {
     std::ifstream in(log_path);
     if (!in.is_open()) {
@@ -128,6 +135,7 @@ std::optional<std::string> read_sum_from_log(const fs::path& log_path) {
 }
 
 int main() {
+    // Racines de travail du prototype.
     const fs::path root = fs::current_path();
     const fs::path core_set_path = root / "core_set.txt";
     const fs::path inputs_dir = root / "inputs";
@@ -140,6 +148,7 @@ int main() {
         return 1;
     }
 
+    // Revalide les fichiers d'entrée des providers présents dans le core set.
     std::vector<ProviderInput> selected;
     selected.reserve(core_set.size());
     long long fallback_sum = 0;
@@ -151,9 +160,11 @@ int main() {
             return 1;
         }
         selected.push_back(*parsed);
+        // Somme locale de secours si l'exécution MP-SPDZ échoue.
         fallback_sum += parsed->value;
     }
 
+    // Convertit le core set en index de parties MP-SPDZ (0..N-1).
     const fs::path player_data_dir = mp_spdz_root / "Player-Data";
     fs::create_directories(player_data_dir);
     for (size_t party = 0; party < selected.size(); ++party) {
@@ -174,6 +185,7 @@ int main() {
 
     const fs::path player_online_binary = mp_spdz_root / "Player-Online.x";
     if (!fs::exists(player_online_binary)) {
+        // Cas fréquent en environnement de dev: runtime MP-SPDZ non construit.
         std::cout << "Player-Online.x not found. Integration attempted but runtime unavailable.\n";
         std::cout << "Fallback sum from validated inputs = " << fallback_sum << "\n";
         return 0;
@@ -191,6 +203,7 @@ int main() {
         quote_shell(project_sum_program.string()) + " " + std::to_string(n_parties);
     std::cout << "Compiling sum.mpc with MP-SPDZ...\n";
     if (run_shell_command(compile_cmd) != 0) {
+        // Le bridge reste exploitable même si la compilation MP-SPDZ échoue.
         std::cout << "MP-SPDZ compilation failed. Fallback sum = " << fallback_sum << "\n";
         return 0;
     }
@@ -202,6 +215,7 @@ int main() {
     std::vector<std::future<int>> jobs;
     jobs.reserve(selected.size());
     for (int party = 0; party < n_parties; ++party) {
+        // Chaque partie MP-SPDZ tourne en parallèle, avec un log dédié.
         const fs::path log_path = logs_dir / ("player_" + std::to_string(party) + ".log");
         const std::string cmd =
             "cd " + quote_shell(mp_spdz_root.string()) + " && " +
@@ -225,6 +239,7 @@ int main() {
 
     const auto parsed_sum = read_sum_from_log(logs_dir / "player_0.log");
     if (parsed_sum) {
+        // Convention de sortie du programme sum.mpc: "SUM=<valeur>".
         std::cout << "MP-SPDZ result: SUM=" << *parsed_sum << "\n";
     } else {
         std::cout << "Could not parse SUM from MP-SPDZ logs. Fallback sum = " << fallback_sum << "\n";

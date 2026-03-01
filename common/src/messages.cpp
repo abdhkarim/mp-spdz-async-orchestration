@@ -1,8 +1,10 @@
 #include "common/messages.hpp"
 
 /*
- * Ce fichier est volontairement vide.
- * Les messages sont de simples structures définies dans le header.
+ * Les structures de messages sont "header-only" pour l'instant :
+ * - pas de logique d'exécution,
+ * - uniquement des contrats de données partagés.
  *
- * Il existe pour garder une architecture extensible et propre.
+ * Ce .cpp est conservé pour faciliter l'évolution future (validation,
+ * helpers de conversion, compatibilité de versions de messages, etc.).
  */
