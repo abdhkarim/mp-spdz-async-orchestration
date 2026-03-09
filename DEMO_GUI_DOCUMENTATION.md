@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-Data Provider - Tkinter GUI for MP-SPDZ Async Orchestration Demo
+Fournisseur de Données - Interface Graphique Tkinter pour Démonstration d'Orchestration Asynchrone MP-SPDZ
 
-This graphical interface allows manual control over the demonstration workflow:
-- Run providers with custom ID and values
-- Simulate malicious providers with --malformed flag
-- Trigger consensus filtering
-- Execute SPDZ bridge with MPC computation
+Cette interface graphique permet le contrôle manuel du workflow de démonstration :
+- Exécuter des fournisseurs avec ID et valeurs personnalisés
+- Simuler des fournisseurs malveillants avec le drapeau --malformed
+- Déclencher le filtrage de consensus
+- Exécuter le pont SPDZ avec calcul MPC
 
-Features:
-  - Real-time output display in scrollable text area
-  - Interactive buttons for each phase (providers, consensus, bridge)
-  - Input validation and error handling
-  - Clean separation of concerns (logging, execution, UI)
+Fonctionnalités :
+  - Affichage en temps réel de la sortie dans une zone de texte déroulante
+  - Boutons interactifs pour chaque phase (fournisseurs, consensus, pont)
+  - Validation des entrées et gestion d'erreurs
+  - Séparation claire des préoccupations (logging, exécution, UI)
 
-Usage:
+Utilisation :
   python3 demo_gui.py
 
-The GUI assumes:
-  - build/ directory exists with compiled binaries
-  - Execution context from project root
-  - build/ contains: node/data_provider, consensus/consensus, spdz_bridge/spdz_bridge
+L'interface graphique suppose :
+  - Le répertoire build/ existe avec les binaires compilés
+  - Contexte d'exécution depuis la racine du projet
+  - build/ contient : node/data_provider, consensus/consensus, spdz_bridge/spdz_bridge
 """
 
 import os
@@ -28,22 +28,22 @@ import subprocess
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 
-# Reference to build directory (where CMake outputs executables)
+# Référence au répertoire build (où CMake génère les exécutables)
 BUILD_DIR = os.path.join(os.getcwd(), "build")
 
 
 def run_cmd(cmd: str) -> str:
     """
-    Execute a shell command and capture its output.
+    Exécute une commande shell et capture sa sortie.
     
     Args:
-        cmd: Command string to execute (e.g., "./node/data_provider 1 42")
+        cmd: Chaîne de commande à exécuter (ex. "./node/data_provider 1 42")
         
     Returns:
-        Command output as string (stdout + stderr combined)
+        Sortie de la commande sous forme de chaîne (stdout + stderr combinés)
         
     Raises:
-        subprocess.CalledProcessError if command fails
+        subprocess.CalledProcessError si la commande échoue
     """
     try:
         output = subprocess.check_output(cmd, shell=True, cwd=BUILD_DIR, stderr=subprocess.STDOUT)
@@ -54,17 +54,17 @@ def run_cmd(cmd: str) -> str:
 
 def provider():
     """
-    Handle 'Run provider' button click.
+    Gère le clic sur le bouton 'Exécuter fournisseur'.
     
-    Validates input fields, constructs command with optional --malformed flag,
-    executes provider binary, and displays output.
+    Valide les champs d'entrée, construit la commande avec le drapeau --malformed optionnel,
+    exécute le binaire fournisseur, et affiche la sortie.
     """
     id_ = entry_id.get().strip()
     val = entry_val.get().strip()
     malformed = var_malformed.get()
     
     if not id_ or not val:
-        messagebox.showwarning("Input", "Please fill both ID and value fields.")
+        messagebox.showwarning("Entrée", "Veuillez remplir les champs ID et valeur.")
         return
     
     cmd = f"./node/data_provider {id_} {val}"
@@ -77,10 +77,10 @@ def provider():
 
 def consensus():
     """
-    Handle 'Run consensus' button click.
+    Gère le clic sur le bouton 'Exécuter consensus'.
     
-    Executes consensus module to filter malformed providers and decide core set.
-    Waits 10 seconds for async collection before validation.
+    Exécute le module consensus pour filtrer les fournisseurs malformés et décider de l'ensemble de base.
+    Attend 10 secondes pour la collecte asynchrone avant validation.
     """
     append("$ ./consensus/consensus\n")
     append(run_cmd("./consensus/consensus") + "\n")
@@ -88,11 +88,11 @@ def consensus():
 
 def bridge():
     """
-    Handle 'Run bridge' button click.
+    Gère le clic sur le bouton 'Exécuter pont'.
     
-    Executes SPDZ bridge orchestrator.
-    - If MP-SPDZ is available: compiles and runs secure MPC
-    - If MP-SPDZ missing: returns fallback sum of validated inputs
+    Exécute l'orchestrateur du pont SPDZ.
+    - Si MP-SPDZ est disponible : compile et exécute le MPC sécurisé
+    - Si MP-SPDZ manquant : retourne la somme de repli des entrées validées
     """
     append("$ ./spdz_bridge/spdz_bridge\n")
     append(run_cmd("./spdz_bridge/spdz_bridge") + "\n")
@@ -100,57 +100,57 @@ def bridge():
 
 def append(text: str) -> None:
     """
-    Append text to output area and auto-scroll to end.
+    Ajoute du texte à la zone de sortie et fait défiler automatiquement jusqu'à la fin.
     
     Args:
-        text: Text to append to the scrolled text widget
+        text: Texte à ajouter au widget de texte déroulant
     """
     txt.insert(tk.END, text)
     txt.see(tk.END)
 
 
-# Create main window
+# Créer la fenêtre principale
 root = tk.Tk()
-root.title("MP-SPDZ Demo")
+root.title("Démo MP-SPDZ")
 root.geometry("900x600")
 
-# Frame for input controls
+# Cadre pour les contrôles d'entrée
 frm = tk.Frame(root, padx=10, pady=10)
 frm.pack(fill=tk.BOTH, expand=True)
 
-# Provider ID input
-lbl_id = tk.Label(frm, text="Provider ID:")
+# Entrée ID du fournisseur
+lbl_id = tk.Label(frm, text="ID Fournisseur :")
 lbl_id.grid(row=0, column=0, sticky=tk.W)
 entry_id = tk.Entry(frm, width=5)
 entry_id.grid(row=0, column=1, sticky=tk.W)
 
-# Provider value input
-lbl_val = tk.Label(frm, text="Value:")
+# Entrée valeur du fournisseur
+lbl_val = tk.Label(frm, text="Valeur :")
 lbl_val.grid(row=0, column=2, sticky=tk.W, padx=(20, 0))
 entry_val = tk.Entry(frm, width=10)
 entry_val.grid(row=0, column=3, sticky=tk.W)
 
-# Malformed checkbox
+# Case à cocher malformé
 var_malformed = tk.IntVar()
-chk = tk.Checkbutton(frm, text="malformed", variable=var_malformed)
+chk = tk.Checkbutton(frm, text="malformé", variable=var_malformed)
 chk.grid(row=0, column=4, padx=5)
 
-# Run provider button
-btn_provider = tk.Button(frm, text="Run provider", command=provider)
+# Bouton exécuter fournisseur
+btn_provider = tk.Button(frm, text="Exécuter fournisseur", command=provider)
 btn_provider.grid(row=0, column=5, padx=5)
 
-# Consensus and Bridge buttons
-btn_consensus = tk.Button(frm, text="Run consensus", command=consensus)
+# Boutons Consensus et Pont
+btn_consensus = tk.Button(frm, text="Exécuter consensus", command=consensus)
 btn_consensus.grid(row=1, column=0, columnspan=2, pady=5)
 
-btn_bridge = tk.Button(frm, text="Run bridge", command=bridge)
+btn_bridge = tk.Button(frm, text="Exécuter pont", command=bridge)
 btn_bridge.grid(row=1, column=2, columnspan=2, pady=5)
 
-# Output text area (scrollable)
+# Zone de texte de sortie (déroulante)
 txt = scrolledtext.ScrolledText(frm, width=100, height=25, wrap=tk.WORD)
 txt.grid(row=2, column=0, columnspan=6, pady=10, sticky=tk.NSEW)
 
-# Configure grid to expand
+# Configurer la grille pour étendre
 frm.rowconfigure(2, weight=1)
 frm.columnconfigure(5, weight=1)
 
