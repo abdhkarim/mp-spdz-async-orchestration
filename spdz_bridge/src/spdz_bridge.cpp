@@ -175,12 +175,27 @@ int main(int argc, char** argv) {
     const fs::path mp_spdz_root = root / "third_party" / "MP-SPDZ";
 
     fs::path program_path = root / "programs" / "sum.mpc"; // programme par défaut temporaire
-    if (argc >= 2) {
-        fs::path candidate = argv[1];
+
+BackendKind backend = BackendKind::Semi2k; // défaut temporaire
+for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+
+    if (arg == "--backend" && i + 1 < argc) {
+        std::string backend_name = argv[++i];
+        if (backend_name == "semi2k") {
+            backend = BackendKind::Semi2k;
+        } else if (backend_name == "player-online") {
+            backend = BackendKind::PlayerOnline;
+        } else {
+            std::cerr << "Unknown backend: " << backend_name << "\n";
+            return 1;
+        }
+    } else {
+        fs::path candidate = arg;
         program_path = candidate.is_absolute() ? candidate : (root / candidate);
     }
-    program_path = fs::absolute(program_path);
-    BackendKind backend = BackendKind::PlayerOnline;
+}
+program_path = fs::absolute(program_path);
     const auto core_set = read_core_set(core_set_path);
     if (core_set.empty()) {
         std::cerr << "No providers in core set. Ensure consensus generated core_set.txt.\n";
