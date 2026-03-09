@@ -135,31 +135,52 @@ std::vector<int> read_core_set(const fs::path& core_set_path) {
     return ids;
 }
 
-// Extrait "SUM=<valeur>" depuis un log MP-SPDZ.
-std::optional<std::string> read_sum_from_log(const fs::path& log_path) {
+// Extrait "RESULT=<valeur>" depuis un log MP-SPDZ.
+std::optional<std::string> read_result_from_log(const fs::path& log_path) {
     std::ifstream in(log_path);
     if (!in.is_open()) {
         return std::nullopt;
     }
     std::string line;
-    std::regex sum_regex(R"(SUM=([-]?\d+))");
+    std::regex result_regex(R"(RESULT=(.*))");
     while (std::getline(in, line)) {
         std::smatch m;
-        if (std::regex_search(line, m, sum_regex)) {
+        if (std::regex_search(line, m, result_regex)) {
             return m[1].str();
         }
     }
     return std::nullopt;
 }
 
-int main() {
+enum class BackendKind {
+    Semi2k,
+    PlayerOnline
+};
+
+fs::path get_backend_binary(const fs::path& mp_spdz_root, BackendKind backend) {
+    switch (backend) {
+        case BackendKind::Semi2k:
+            return mp_spdz_root / "semi2k-party.x";
+        case BackendKind::PlayerOnline:
+            return mp_spdz_root / "Player-Online.x";
+    }
+    return {};
+}
+
+int main(int argc, char** argv) {
     // Racines de travail du prototype.
     const fs::path root = fs::current_path();
     const fs::path core_set_path = root / "core_set.txt";
     const fs::path inputs_dir = root / "inputs";
     const fs::path mp_spdz_root = root / "third_party" / "MP-SPDZ";
-    const fs::path project_sum_program = root / "programs" / "sum.mpc";
 
+    fs::path program_path = root / "programs" / "sum.mpc"; // programme par défaut temporaire
+    if (argc >= 2) {
+        fs::path candidate = argv[1];
+        program_path = candidate.is_absolute() ? candidate : (root / candidate);
+    }
+    program_path = fs::absolute(program_path);
+    BackendKind backend = BackendKind::PlayerOnline;
     const auto core_set = read_core_set(core_set_path);
     if (core_set.empty()) {
         std::cerr << "No providers in core set. Ensure consensus generated core_set.txt.\n";
@@ -201,25 +222,25 @@ int main() {
         std::cout << "  " << selected[i].id << " -> " << i << "\n";
     }
 
-    const fs::path player_online_binary = mp_spdz_root / "Player-Online.x";
-    if (!fs::exists(player_online_binary)) {
-        // Cas fréquent en environnement de dev: runtime MP-SPDZ non construit.
-        std::cout << "Player-Online.x not found. Integration attempted but runtime unavailable.\n";
-        std::cout << "Fallback sum from validated inputs = " << fallback_sum << "\n";
-        return 0;
+    const fs::path backend_binary = get_backend_binary(mp_spdz_root, backend);
+    if (!fs::exists(backend_binary)) {
+    std::cout << "Backend runtime not found: " << backend_binary << "\n";
+    std::cout << "Fallback sum from validated inputs = " << fallback_sum << "\n";
+    return 0;
     }
-    if (!fs::exists(project_sum_program)) {
-        std::cerr << "Missing program file: " << project_sum_program << "\n";
+    if (!fs::exists(program_path)) {
+        std::cerr << "Missing program file: " << program_path << "\n";
         return 1;
     }
 
     const int n_parties = static_cast<int>(selected.size());
-    const std::string compiled_program_name = "sum-" + std::to_string(n_parties);
+    const std::string program_base = program_path.stem().string();
+    const std::string compiled_program_name = program_base + "-" + std::to_string(n_parties);
 
     const std::string compile_cmd =
         "cd " + quote_shell(mp_spdz_root.string()) + " && python3 compile.py " +
-        quote_shell(project_sum_program.string()) + " " + std::to_string(n_parties);
-    std::cout << "Compiling sum.mpc with MP-SPDZ...\n";
+        quote_shell(program_path.string()) + " " + std::to_string(n_parties);
+    std::cout << "Compiling program " << program_path.filename().string() << " with MP-SPDZ...\n";
     if (run_shell_command(compile_cmd) != 0) {
         // Le bridge reste exploitable même si la compilation MP-SPDZ échoue.
         std::cout << "MP-SPDZ compilation failed. Fallback sum = " << fallback_sum << "\n";
@@ -237,7 +258,7 @@ int main() {
         const fs::path log_path = logs_dir / ("player_" + std::to_string(party) + ".log");
         const std::string cmd =
             "cd " + quote_shell(mp_spdz_root.string()) + " && " +
-            quote_shell(player_online_binary.string()) + " " + std::to_string(party) +
+            quote_shell(backend_binary.string()) + " " + std::to_string(party) +
             " " + compiled_program_name + " -N " + std::to_string(n_parties) +
             " -pn " + std::to_string(port_base) +
             " -h localhost > " + quote_shell(log_path.string()) + " 2>&1";
@@ -255,13 +276,12 @@ int main() {
         }
     }
 
-    const auto parsed_sum = read_sum_from_log(logs_dir / "player_0.log");
-    if (parsed_sum) {
-        // Convention de sortie du programme sum.mpc: "SUM=<valeur>".
-        std::cout << "MP-SPDZ result: SUM=" << *parsed_sum << "\n";
-    } else {
-        std::cout << "Could not parse SUM from MP-SPDZ logs. Fallback sum = " << fallback_sum << "\n";
-    }
+    const auto parsed_result = read_result_from_log(logs_dir / "player_0.log");
+if (parsed_result) {
+    std::cout << "MP-SPDZ result: RESULT=" << *parsed_result << "\n";
+} else {
+    std::cout << "Could not parse RESULT from MP-SPDZ logs. Fallback sum = " << fallback_sum << "\n";
+}
 
     if (!all_ok) {
         std::cout << "Some MP-SPDZ parties failed; fallback sum from validated inputs = "
