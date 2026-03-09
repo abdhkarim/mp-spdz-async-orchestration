@@ -1,0 +1,4 @@
+id=1
+value=42
+nonce=6603762b7859abfcbb1b20b30fcb7005
+proof=b0666e14bf6e478ceec27f8c5ff2ad908d8c97fc0f882f47ca6c5e904079fd5d

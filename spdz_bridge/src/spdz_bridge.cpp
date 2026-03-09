@@ -157,8 +157,9 @@ int main() {
     const fs::path root = fs::current_path();
     const fs::path core_set_path = root / "core_set.txt";
     const fs::path inputs_dir = root / "inputs";
-    const fs::path mp_spdz_root = root / "third_party" / "MP-SPDZ";
-    const fs::path project_sum_program = root / "programs" / "sum.mpc";
+    // Chemins remont d'un niveau si exécuté depuis build/
+    const fs::path mp_spdz_root = root / ".." / "third_party" / "MP-SPDZ";
+    const fs::path project_sum_program = root / ".." / "programs" / "sum.mpc";
 
     const auto core_set = read_core_set(core_set_path);
     if (core_set.empty()) {

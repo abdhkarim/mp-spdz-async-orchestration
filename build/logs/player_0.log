@@ -1,0 +1,8 @@
+Using statistical security parameter 40
+REUSING DATA - ONLY FOR BENCHMARKING
+SUM=90
+The following benchmarks are excluding preprocessing (offline phase).
+Time = 0.0318012 seconds 
+Data sent = 0.000348 MB in ~13 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.001296 MB (all parties)
+This virtual machine was compiled with GCC. Recompile with 'CXX = clang++' in 'CONFIG.mine' for optimal performance.

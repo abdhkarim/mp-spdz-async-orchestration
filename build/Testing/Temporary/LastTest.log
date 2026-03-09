@@ -1,0 +1,63 @@
+Start testing: Mar 09 14:54 CET
+----------------------------------------------------------
+1/1 Testing: data_provider_tests
+1/1 Test: data_provider_tests
+Command: "/mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration/build/node/test_data_provider"
+Directory: /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration/build/node
+"data_provider_tests" start time: Mar 09 14:54 CET
+Output:
+----------------------------------------------------------
+╔════════════════════════════════════════════╗
+║   Data Provider Unit Tests                 ║
+╚════════════════════════════════════════════╝
+
+=== Test Suite: validate_id ===
+[PASS] Single digit ID
+[PASS] ID with underscore
+[PASS] ID with hyphen
+[PASS] Mixed alphanumeric
+[PASS] Empty ID
+[PASS] ID too long (>32 chars)
+[PASS] ID with special char (@)
+[PASS] ID with path separator (/)
+[PASS] ID with path traversal
+[PASS] ID with space
+
+=== Test Suite: validate_value ===
+[PASS] Zero
+[PASS] Positive integer
+[PASS] Negative integer
+[PASS] Max int64
+[PASS] Empty value
+[PASS] Non-numeric value
+[PASS] Floating point
+[PASS] Scientific notation
+[PASS] Value too long (>64 chars)
+
+=== Test Suite: to_hex ===
+[PASS] Empty data produces empty string
+[PASS] Single byte 0xAB -> 'ab'
+[PASS] Multiple bytes conversion
+[PASS] Full hex range
+
+=== Test Suite: compute_proof ===
+[PASS] Same inputs produce same proof
+[PASS] Proof is 64 hex chars (32 bytes)
+[PASS] Different value produces different proof
+[PASS] Different secret produces different proof
+
+╔════════════════════════════════════════════╗
+║   Test Summary                             ║
+╠════════════════════════════════════════════╣
+║  Passed: 27 
+║  Failed: 0 
+╚════════════════════════════════════════════╝
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"data_provider_tests" end time: Mar 09 14:54 CET
+"data_provider_tests" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Mar 09 14:54 CET

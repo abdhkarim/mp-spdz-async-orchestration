@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/test_data_provider.dir/src/test_data_provider.cpp.o -o test_data_provider  /usr/lib/x86_64-linux-gnu/libsodium.so 

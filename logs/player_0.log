@@ -1,2 +1,7 @@
 Using statistical security parameter 40
-Timed out waiting for peer. See https://mp-spdz.readthedocs.io/en/latest/networking.html for details on networking.
+SUM=22
+The following benchmarks are excluding preprocessing (offline phase).
+Time = 0.0416824 seconds 
+Data sent = 0.000116 MB in ~7 rounds (party 0 only; use '-v' for more details)
+Global data sent = 0.000232 MB (all parties)
+This virtual machine was compiled with GCC. Recompile with 'CXX = clang++' in 'CONFIG.mine' for optimal performance.
