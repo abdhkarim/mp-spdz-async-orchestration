@@ -14,4 +14,4 @@ for i in range(n):
     total += sint.get_input_from(i)
 
 # Convention de parsing côté bridge : rechercher la forme "SUM=<entier>".
-print_ln("SUM=%s", total.reveal())
+print_ln("RESULT=%s", c.reveal())
