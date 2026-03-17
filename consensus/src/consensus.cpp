@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -8,7 +7,6 @@
 #include <regex>
 #include <sodium.h>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -125,23 +123,23 @@ int main(int argc, char* argv[]) {
         return std::string("mpc-demo-secret");
     }();
 
-    // Timeout configurable pour simuler une fenêtre de collecte fixe.
-    int timeout_seconds = 10;
+    // Quorum minimal requis pour autoriser la décision du core set.
+    int min_inputs = 3;
     if (argc == 2) {
-        const auto parsed_timeout = parse_integer(argv[1]);
-        if (!parsed_timeout || *parsed_timeout < 0) {
-            std::cerr << "Invalid timeout value: " << argv[1] << "\n";
+        const auto parsed_min = parse_integer(argv[1]);
+        if (!parsed_min || *parsed_min <= 0) {
+            std::cerr << "Invalid minimum input count: " << argv[1] << "\n";
             return 1;
         }
-        timeout_seconds = static_cast<int>(*parsed_timeout);
+        min_inputs = static_cast<int>(*parsed_min);
     } else if (argc > 2) {
-        std::cerr << "Usage: ./consensus [timeout_seconds]\n";
+        std::cerr << "Usage: ./consensus [min_inputs]\n";
         return 1;
     }
 
-    // Simule un consensus "attend puis tranche".
-    std::cout << "Consensus waiting " << timeout_seconds << " seconds for provider inputs...\n";
-    std::this_thread::sleep_for(std::chrono::seconds(timeout_seconds));
+    // Le consensus décide immédiatement sur les entrées disponibles.
+    std::cout << "Consensus quorum policy: need at least " << min_inputs
+              << " valid input(s) to decide a core set.\n";
 
     const fs::path inputs_dir = fs::current_path() / "inputs";
     const fs::path core_set_file = fs::current_path() / "core_set.txt";
@@ -189,6 +187,17 @@ int main(int argc, char* argv[]) {
     // Déduplication défensive (utile si un même id apparaît plusieurs fois).
     std::sort(core_set_ids.begin(), core_set_ids.end());
     core_set_ids.erase(std::unique(core_set_ids.begin(), core_set_ids.end()), core_set_ids.end());
+
+    if (static_cast<int>(core_set_ids.size()) < min_inputs) {
+        // Pas de quorum: on refuse explicitement la décision.
+        if (fs::exists(core_set_file)) {
+            fs::remove(core_set_file);
+        }
+        std::cerr << "Not enough valid inputs to decide core set (have "
+                  << core_set_ids.size() << ", need " << min_inputs << ").\n";
+        std::cerr << "No core_set.txt produced.\n";
+        return 1;
+    }
 
     std::ofstream out(core_set_file);
     if (!out.is_open()) {
