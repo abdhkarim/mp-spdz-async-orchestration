@@ -154,6 +154,27 @@ cmake -S . -B build
 cmake --build build -j4
 ```
 
+## Windows + WSL (recommandé)
+
+Si tu développes sur Windows, utilise WSL pour toute la chaîne CMake/MP-SPDZ.
+
+Depuis PowerShell :
+
+```powershell
+wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
+```
+
+Ce script fait automatiquement :
+- `cmake ..`
+- `cmake --build . -j`
+- `./spdz_bridge/spdz_bridge`
+
+Tu peux aussi passer les arguments du bridge :
+
+```powershell
+wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
+```
+
 ## Démo rapide (crash + malveillant + somme)
 
 Depuis la racine du projet :

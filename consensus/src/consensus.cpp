@@ -15,6 +15,7 @@ namespace fs = std::filesystem;
 struct ProviderInput {
     int id = -1;
     long long value = 0;
+    std::string masked_value_str;  // Pour les valeurs masquées, garde la chaîne complète
     std::string nonce;
     std::string proof;
 };
@@ -89,22 +90,45 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
 
     const std::string id_prefix = "id=";
     const std::string value_prefix = "value=";
+    const std::string masked_value_prefix = "masked_value=";
     const std::string nonce_prefix = "nonce=";
     const std::string proof_prefix = "proof=";
-    if (line1.rfind(id_prefix, 0) != 0 || line2.rfind(value_prefix, 0) != 0 ||
+    
+    // Support both old format (value=) and new format (masked_value=)
+    bool is_masked = (line2.rfind(masked_value_prefix, 0) == 0);
+    bool is_plain = (line2.rfind(value_prefix, 0) == 0);
+    
+    if (line1.rfind(id_prefix, 0) != 0 || (!is_masked && !is_plain) ||
         line3.rfind(nonce_prefix, 0) != 0 || line4.rfind(proof_prefix, 0) != 0) {
         return std::nullopt;
     }
 
     const auto id = parse_integer(line1.substr(id_prefix.size()));
-    const auto value = parse_integer(line2.substr(value_prefix.size()));
-    if (!id || !value) {
+    
+    // Extract value based on detected format
+    size_t value_offset = is_masked ? masked_value_prefix.size() : value_prefix.size();
+    std::string value_str = line2.substr(value_offset);
+    
+    std::optional<long long> value;
+    std::string masked_value_str;
+    if (is_masked) {
+        // Pour les valeurs masquées, on garde la chaîne complète
+        masked_value_str = value_str;
+        // On ne parse pas comme entier pour les masquées
+        value = 0;  // valeur dummy
+    } else {
+        // Pour les valeurs plain, on parse comme entier
+        value = parse_integer(value_str);
+    }
+    
+    if (!id || (!is_masked && !value)) {
         return std::nullopt;
     }
 
     ProviderInput parsed;
     parsed.id = static_cast<int>(*id);
-    parsed.value = *value;
+    parsed.value = is_masked ? 0 : *value;  // valeur dummy pour masquées
+    parsed.masked_value_str = masked_value_str;
     parsed.nonce = line3.substr(nonce_prefix.size());
     parsed.proof = line4.substr(proof_prefix.size());
     return parsed;
@@ -123,17 +147,34 @@ int main(int argc, char* argv[]) {
         return std::string("mpc-demo-secret");
     }();
 
-    // Quorum minimal requis pour autoriser la décision du core set.
+    // Arguments:
+    //   ./consensus [min_inputs] [--clean-inputs]
+    //   ./consensus [--clean-inputs] [min_inputs]
     int min_inputs = 3;
-    if (argc == 2) {
-        const auto parsed_min = parse_integer(argv[1]);
-        if (!parsed_min || *parsed_min <= 0) {
-            std::cerr << "Invalid minimum input count: " << argv[1] << "\n";
-            return 1;
+    bool clean_inputs = false;
+    bool min_inputs_set = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--clean-inputs") {
+            clean_inputs = true;
+            continue;
         }
-        min_inputs = static_cast<int>(*parsed_min);
-    } else if (argc > 2) {
-        std::cerr << "Usage: ./consensus [min_inputs]\n";
+
+        if (!min_inputs_set) {
+            const auto parsed_min_inputs = parse_integer(arg);
+            if (!parsed_min_inputs || *parsed_min_inputs <= 0) {
+                std::cerr << "Invalid argument: " << arg << "\n";
+                std::cerr << "Usage: ./consensus [min_inputs] [--clean-inputs]\n";
+                return 1;
+            }
+            min_inputs = static_cast<int>(*parsed_min_inputs);
+            min_inputs_set = true;
+            continue;
+        }
+
+        std::cerr << "Unexpected argument: " << arg << "\n";
+        std::cerr << "Usage: ./consensus [min_inputs] [--clean-inputs]\n";
         return 1;
     }
 
@@ -144,6 +185,44 @@ int main(int argc, char* argv[]) {
     const fs::path inputs_dir = fs::current_path() / "inputs";
     const fs::path core_set_file = fs::current_path() / "core_set.txt";
     std::vector<int> core_set_ids;
+
+    if (clean_inputs && fs::exists(inputs_dir)) {
+        // Nettoyage défensif: supprime uniquement les fichiers provider_*.txt obsolètes.
+        // Les fichiers récents (potentiellement de l'exécution courante) sont conservés.
+        const std::regex filename_regex(R"(provider_(\d+)\.txt)");
+        const auto now = fs::file_time_type::clock::now();
+        constexpr auto stale_grace = std::chrono::seconds(30);
+        size_t removed_count = 0;
+
+        for (const auto& entry : fs::directory_iterator(inputs_dir)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            const std::string filename = entry.path().filename().string();
+            std::smatch match;
+            if (!std::regex_match(filename, match, filename_regex)) {
+                continue;
+            }
+
+            std::error_code ec;
+            const auto last_write = fs::last_write_time(entry.path(), ec);
+            if (ec) {
+                continue;
+            }
+
+            if ((now - last_write) > stale_grace) {
+                fs::remove(entry.path(), ec);
+                if (!ec) {
+                    ++removed_count;
+                }
+            }
+        }
+
+        if (removed_count > 0) {
+            std::cout << "Cleaned " << removed_count << " stale provider input file(s).\n";
+        }
+    }
 
     if (!fs::exists(inputs_dir)) {
         std::cout << "Inputs directory not found. Writing empty core set.\n";
@@ -173,7 +252,9 @@ int main(int argc, char* argv[]) {
                 continue;
             }
             const std::string expected_proof = compute_proof(
-                std::to_string(parsed->id), std::to_string(parsed->value), parsed->nonce, secret);
+                std::to_string(parsed->id), 
+                parsed->masked_value_str.empty() ? std::to_string(parsed->value) : parsed->masked_value_str,
+                parsed->nonce, secret);
             if (expected_proof != parsed->proof) {
                 std::cout << "Ignoring provider file with invalid cryptographic proof: "
                           << entry.path() << "\n";
@@ -189,7 +270,6 @@ int main(int argc, char* argv[]) {
     core_set_ids.erase(std::unique(core_set_ids.begin(), core_set_ids.end()), core_set_ids.end());
 
     if (static_cast<int>(core_set_ids.size()) < min_inputs) {
-        // Pas de quorum: on refuse explicitement la décision.
         if (fs::exists(core_set_file)) {
             fs::remove(core_set_file);
         }
