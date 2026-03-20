@@ -4,13 +4,25 @@
 # - Les valeurs (x_i - s_i) restent publiques (broadcast client).
 # - Le MPC reconstruit <x_i> = (x_i - s_i) + <s_i>, puis somme les <x_i>.
 
-if len(program.args) < 3:
+masked_payload = open("Player-Data/Public-Masked-Values").read().strip().splitlines()
+
+n_inputs = None
+if len(program.args) == 2:
+    # program.args[0] = "/.../programs/sum.mpc"
+    # program.args[1] = "<num_parties>"
+    n_parties = int(program.args[1])
+elif len(program.args) >= 3:
+    # program.args[1] = "<num_parties>"
+    # program.args[2] = "<num_inputs>"
+    n_parties = int(program.args[1])
+    n_inputs = int(program.args[2])
+else:
     raise Exception("Usage: sum <num_parties> <num_inputs>")
 
-n_parties = int(program.args[1])
-n_inputs = int(program.args[2])
+if n_inputs is None:
+    # If MP-SPDZ didn't pass num_inputs, infer it from the masked values file
+    n_inputs = len(masked_payload)
 
-masked_payload = open("Player-Data/Public-Masked-Values").read().strip().splitlines()
 if len(masked_payload) < n_inputs:
     raise Exception("Invalid Player-Data/Public-Masked-Values content")
 

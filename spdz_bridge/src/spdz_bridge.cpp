@@ -212,7 +212,6 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     if (is_masked) {
         // Pour les valeurs masquées, on garde la valeur masquée telle quelle
         // L'extraction x = (x-s) + s sera faite par MP-SPDZ
-        value_str = value_str;  // Garder la valeur masquée
         value = 0;  // Valeur dummy, on n'en a pas besoin
     } else {
         value = parse_integer(value_str);
@@ -255,7 +254,7 @@ int run_shell_command(const std::string& cmd) {
 
 std::optional<BridgeConfig> parse_bridge_args(int argc, char** argv, const fs::path& root) {
     BridgeConfig config;
-    config.program_path = root / ".." / "programs" / "sum.mpc";
+    config.program_path = root / "programs" / "sum.mpc";
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -689,8 +688,8 @@ std::unordered_map<int, std::string> read_provider_secrets(const fs::path& root)
 }
 
 int issue_provider_secrets(const fs::path& root, int max_provider_id) {
-    const fs::path mp_spdz_root = root / ".." / "third_party" / "MP-SPDZ";
-    const fs::path issue_program = root / ".." / "programs" / "issue_secrets.mpc";
+    const fs::path mp_spdz_root = root / "third_party" / "MP-SPDZ";
+    const fs::path issue_program = root / "programs" / "issue_secrets.mpc";
     const fs::path secrets_dir = root / "provider_secrets";
 
     fs::create_directories(secrets_dir);
@@ -955,7 +954,7 @@ int main(int argc, char** argv) {
     const fs::path root          = fs::current_path();
     const fs::path core_set_path = root / "core_set.txt";
     const fs::path inputs_dir    = root / "inputs";
-    const fs::path mp_spdz_root  = root / ".." / "third_party" / "MP-SPDZ";
+    const fs::path mp_spdz_root  = root / "third_party" / "MP-SPDZ";
     const fs::path logs_dir      = root / "logs";
     fs::create_directories(logs_dir);
 
