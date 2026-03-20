@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/ack.schema.json",
+  "title": "Computation Node ACK",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "round_id",
+    "provider_id",
+    "computation_node_id",
+    "input_hash",
+    "timestamp_unix_ms",
+    "signature"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "computation_node_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "input_hash": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "timestamp_unix_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{128}$"
+    }
+  }
+}

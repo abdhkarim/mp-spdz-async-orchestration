@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/core_set.schema.json",
+  "title": "Core Set Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "round_id",
+    "decided_at_unix_ms",
+    "k_required",
+    "timeout_seconds",
+    "provider_ids"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "decided_at_unix_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "k_required": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "provider_ids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

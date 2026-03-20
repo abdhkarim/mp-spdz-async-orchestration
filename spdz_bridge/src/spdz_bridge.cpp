@@ -851,8 +851,8 @@ bool prepare_secure_inputs(
     int n_parties,
     cpp_int& fallback_sum_out)
 {
-    if (n_parties <= 0) {
-        std::cerr << "Secure input mapping requires a strictly positive number of computation nodes\n";
+    if (n_parties < 2) {
+        std::cerr << "Secure input mapping requires at least 2 computation nodes\n";
         return false;
     }
 

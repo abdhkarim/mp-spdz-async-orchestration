@@ -249,6 +249,45 @@ grep -R "SUM=" logs
 - Erreur `zsh: no matches found` sur un glob :
   - utiliser `ls logs` puis `grep -R "SUM=" logs`.
 
+## Orchestration asynchrone externe (Phase 1)
+
+Pour avancer vers un modèle "MP-SPDZ compute-only", le dépôt contient
+un orchestrateur externe qui pilote un round complet et produit des
+artefacts de décision.
+
+Commande (WSL/Linux) :
+
+```bash
+./scripts/run_async_round_wsl.sh \
+  --clean \
+  --session-id demo-session \
+  --round-id 0 \
+  --providers 1:10,2:20,3:30,4:40,5:50 \
+  --k-acks 2 \
+  --ack-nodes 3 \
+  --ack-timeout-seconds 2 \
+  --backend semi2k \
+  --computation-nodes 3
+```
+
+Artefacts générés :
+- `artifacts/run_meta.json`
+- `artifacts/core_set.json`
+- `artifacts/justification.json`
+- `artifacts/acks/ack_p*_cn*.json`
+- `artifacts/cn_keys/cn_*.pub.hex` et `cn_*.sec.hex` (signatures ACK Ed25519)
+
+Schémas JSON de référence :
+- `schemas/ack.schema.json`
+- `schemas/core_set.schema.json`
+- `schemas/justification.schema.json`
+
+Scénarios ACK négatifs (insufficient/replay/hash/stale) :
+
+```bash
+./scripts/test_ack_scenarios_wsl.sh
+```
+
 ## Limites
 
 - Consensus centralisé simulé (pas de vrai consensus byzantin).
