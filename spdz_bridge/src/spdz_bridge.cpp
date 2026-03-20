@@ -851,9 +851,8 @@ bool prepare_secure_inputs(
     int n_parties,
     cpp_int& fallback_sum_out)
 {
-    if (n_parties != static_cast<int>(selected.size())) {
-        std::cerr << "Secure input mapping requires --computation-nodes == number of selected providers ("
-                  << selected.size() << ")\n";
+    if (n_parties <= 0) {
+        std::cerr << "Secure input mapping requires a strictly positive number of computation nodes\n";
         return false;
     }
 
@@ -1012,12 +1011,6 @@ int main(int argc, char** argv) {
             : static_cast<int>(selected.size());
 
     if (!validate_backend_party_count(*backend, n_parties)) return 1;
-
-    if (n_parties != static_cast<int>(selected.size())) {
-        std::cerr << "Current secure input mapping requires --computation-nodes == number of selected providers ("
-                  << selected.size() << ")\n";
-        return 1;
-    }
 
     // ── Préparation des entrées sécurisées (shares + masked values) ───────────
     cpp_int fallback_sum = 0;
