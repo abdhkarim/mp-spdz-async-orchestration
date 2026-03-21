@@ -1,0 +1,30 @@
+# Fig.2 input supply: parity (mod 2) of the sum of all reconstructed inputs.
+
+masked_payload = open("Player-Data/Public-Masked-Values").read().strip().splitlines()
+
+n_inputs = None
+if len(program.args) == 2:
+    n_parties = int(program.args[1])
+elif len(program.args) >= 3:
+    n_parties = int(program.args[1])
+    n_inputs = int(program.args[2])
+else:
+    raise Exception("Usage: parity_sum <num_parties> <num_inputs>")
+
+if n_inputs is None:
+    n_inputs = len(masked_payload)
+
+if len(masked_payload) < n_inputs:
+    raise Exception("Invalid Player-Data/Public-Masked-Values content")
+
+total = sint(0)
+
+for i in range(n_inputs):
+    masked_value = int(masked_payload[i])
+    shared_secret_i = sint(0)
+    for p in range(n_parties):
+        shared_secret_i += sint.get_input_from(p)
+    total += sint(masked_value) + shared_secret_i
+
+# Modulo 2: literal power-of-two (MP-SPDZ restriction on sint %)
+print_ln("RESULT=%s", (total % 2).reveal())

@@ -62,6 +62,15 @@ BACKENDS=(
   "player-online"
 )
 
+# All demo .mpc circuits tested against every backend (same Fig.2 inputs + hello_mpc).
+MPC_PROGRAMS=(
+  "sum"
+  "avg"
+  "triple_sum"
+  "parity_sum"
+  "hello_mpc"
+)
+
 pass_count=0
 fail_count=0
 
@@ -157,28 +166,38 @@ else
   mark_fail
 fi
 
-log "4) Backend matrix test"
+log "4) Backend × program matrix (each backend runs each programs/*.mpc demo)"
+export MPC_PROVIDER_SECRET="${MPC_PROVIDER_SECRET:-mpc-demo-secret}"
 for backend in "${BACKENDS[@]}"; do
-  clean_workspace
-  run_cmd "${TMP_DIR}/backend_${backend}_p1.log" ./build/node/data_provider 1 7
-  run_cmd "${TMP_DIR}/backend_${backend}_p2.log" ./build/node/data_provider 2 15
-  run_cmd "${TMP_DIR}/backend_${backend}_consensus.log" ./build/consensus/consensus 2
+  for prog in "${MPC_PROGRAMS[@]}"; do
+    clean_workspace
+    run_cmd "${TMP_DIR}/bm_${backend}_${prog}_p1.log" ./build/node/data_provider 1 7
+    run_cmd "${TMP_DIR}/bm_${backend}_${prog}_p2.log" ./build/node/data_provider 2 15
+    run_cmd "${TMP_DIR}/bm_${backend}_${prog}_p3.log" ./build/node/data_provider 3 20
+    run_cmd "${TMP_DIR}/bm_${backend}_${prog}_consensus.log" ./build/consensus/consensus 3
 
-  set +e
-  run_cmd "${TMP_DIR}/backend_${backend}_bridge.log" ./build/spdz_bridge/spdz_bridge --backend "${backend}" --computation-nodes 3
-  bridge_rc=$?
-  set -e
+    set +e
+    run_cmd "${TMP_DIR}/bm_${backend}_${prog}_bridge.log" ./build/spdz_bridge/spdz_bridge --backend "${backend}" --computation-nodes 3 "${REPO_ROOT}/programs/${prog}.mpc"
+    bridge_rc=$?
+    set -e
 
-  if [[ ${bridge_rc} -eq 0 ]] && assert_contains "MP-SPDZ result: SUM=" "${TMP_DIR}/backend_${backend}_bridge.log"; then
-    append_summary "backend:${backend}" "PASS" "MPC run succeeded"
-    mark_pass
-  elif assert_contains "Backend runtime not found" "${TMP_DIR}/backend_${backend}_bridge.log"; then
-    append_summary "backend:${backend}" "FAIL" "runtime missing in environment"
-    mark_fail
-  else
-    append_summary "backend:${backend}" "FAIL" "bridge failed (rc=${bridge_rc})"
-    mark_fail
-  fi
+    key="backend:${backend}:${prog}"
+    if [[ ${bridge_rc} -eq 0 ]] && assert_contains "MP-SPDZ result:" "${TMP_DIR}/bm_${backend}_${prog}_bridge.log"; then
+      if [[ "${prog}" == "hello_mpc" ]] && ! assert_contains "MP-SPDZ result: 3" "${TMP_DIR}/bm_${backend}_${prog}_bridge.log"; then
+        append_summary "${key}" "FAIL" "hello_mpc expected MP-SPDZ result: 3"
+        mark_fail
+        continue
+      fi
+      append_summary "${key}" "PASS" "MPC run succeeded"
+      mark_pass
+    elif assert_contains "Backend runtime not found" "${TMP_DIR}/bm_${backend}_${prog}_bridge.log"; then
+      append_summary "${key}" "FAIL" "runtime missing in environment"
+      mark_fail
+    else
+      append_summary "${key}" "FAIL" "bridge failed (rc=${bridge_rc})"
+      mark_fail
+    fi
+  done
 done
 
 echo "" >> "${SUMMARY_FILE}"

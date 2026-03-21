@@ -1,0 +1,35 @@
+# Fig.2 input supply (same encoding as sum.mpc): average of reconstructed inputs.
+# Public masked lines + additive shares of s_i per party.
+
+masked_payload = open("Player-Data/Public-Masked-Values").read().strip().splitlines()
+
+n_inputs = None
+if len(program.args) == 2:
+    n_parties = int(program.args[1])
+elif len(program.args) >= 3:
+    n_parties = int(program.args[1])
+    n_inputs = int(program.args[2])
+else:
+    raise Exception("Usage: avg <num_parties> <num_inputs>")
+
+if n_inputs is None:
+    n_inputs = len(masked_payload)
+
+if n_inputs <= 0:
+    raise Exception("avg requires at least one input")
+
+if len(masked_payload) < n_inputs:
+    raise Exception("Invalid Player-Data/Public-Masked-Values content")
+
+total = sint(0)
+
+for i in range(n_inputs):
+    masked_value = int(masked_payload[i])
+    shared_secret_i = sint(0)
+    for p in range(n_parties):
+        shared_secret_i += sint.get_input_from(p)
+    total += sint(masked_value) + shared_secret_i
+
+# Integer division: sint / public int (MP-SPDZ Compiler; may warn about truncation)
+avg = total / n_inputs
+print_ln("RESULT=%s", avg.reveal())

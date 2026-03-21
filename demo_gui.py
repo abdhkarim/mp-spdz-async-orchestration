@@ -165,9 +165,9 @@ class App:
         return rc, out
 
     def _update_summary_from_output(self, out: str) -> None:
-        m_sum = re.search(r"MP-SPDZ result: SUM=([-]?\d+)", out)
+        m_sum = re.search(r"MP-SPDZ result:\s*(?:SUM=)?([-]?\d+)", out)
         if m_sum:
-            self.var_result.set(f"SUM: {m_sum.group(1)}")
+            self.var_result.set(f"MPC result: {m_sum.group(1)}")
 
         m_core = re.search(r"Core set decided with \d+ provider\(s\):\s*(.*)", out)
         if m_core:

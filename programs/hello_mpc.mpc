@@ -1,0 +1,11 @@
+# Minimal program: no Player-Data reads. Echoes n_inputs from compile args (public).
+# Use with the same bridge flow; masked-sum prep may still run but is ignored here.
+
+if len(program.args) < 2:
+    raise Exception("Usage: hello_mpc <num_parties> [<num_inputs>]")
+
+n_parties = int(program.args[1])
+n_inputs = int(program.args[2]) if len(program.args) >= 3 else 0
+
+_ = n_parties
+print_ln("RESULT=%s", n_inputs)

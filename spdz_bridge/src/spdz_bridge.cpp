@@ -24,10 +24,18 @@ struct ProviderInput {
     std::string masked_value_str;  // Pour les valeurs masquées
 };
 
+// masked-sum: Fig.2 bridge (Public-Masked-Values + issue_secrets + additive shares).
+// none: caller prepares third_party/MP-SPDZ/Player-Data; bridge only compiles & runs parties.
+enum class InputPrepMode {
+    MaskedSum,
+    None,
+};
+
 struct BridgeConfig {
     std::string backend_name = "player-online";
     fs::path program_path;
     int computation_nodes = -1;  // -1 => use selected providers count
+    InputPrepMode input_prep = InputPrepMode::MaskedSum;
 };
 
 // Famille de backend MP-SPDZ — détermine la compilation et le runtime.
@@ -252,6 +260,12 @@ int run_shell_command(const std::string& cmd) {
     return rc;
 }
 
+std::optional<InputPrepMode> parse_input_prep_mode(const std::string& s) {
+    if (s == "masked-sum") return InputPrepMode::MaskedSum;
+    if (s == "none") return InputPrepMode::None;
+    return std::nullopt;
+}
+
 std::optional<BridgeConfig> parse_bridge_args(int argc, char** argv, const fs::path& root) {
     BridgeConfig config;
     config.program_path = root / "programs" / "sum.mpc";
@@ -280,6 +294,25 @@ std::optional<BridgeConfig> parse_bridge_args(int argc, char** argv, const fs::p
             }
             config.computation_nodes = static_cast<int>(*parsed_nodes);
             continue;
+        }
+
+        if (arg == "--input-prep") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --input-prep\n";
+                return std::nullopt;
+            }
+            const auto mode = parse_input_prep_mode(argv[++i]);
+            if (!mode) {
+                std::cerr << "Invalid --input-prep (use masked-sum or none)\n";
+                return std::nullopt;
+            }
+            config.input_prep = *mode;
+            continue;
+        }
+
+        if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Unknown option: " << arg << "\n";
+            return std::nullopt;
         }
 
         fs::path candidate = arg;
@@ -932,7 +965,8 @@ bool prepare_secure_inputs(
     return true;
 }
 
-// Extrait "SUM=<valeur>" ou "RESULT=<...>" depuis un log MP-SPDZ.
+// Extrait "RESULT=<...>" ou "SUM=<valeur>" depuis un log MP-SPDZ.
+// RESULT= est testé en premier pour les programmes génériques ; sum.mpc n'imprime que SUM=.
 // Cette fonction sert aussi de parse_result dans les BackendAdapter.
 std::optional<std::string> parse_result_from_log(const fs::path& log_path) {
     std::ifstream in(log_path);
@@ -942,8 +976,8 @@ std::optional<std::string> parse_result_from_log(const fs::path& log_path) {
     std::regex result_regex(R"(RESULT=(.*))");
     while (std::getline(in, line)) {
         std::smatch m;
-        if (std::regex_search(line, m, sum_regex))    return m[1].str();
         if (std::regex_search(line, m, result_regex)) return m[1].str();
+        if (std::regex_search(line, m, sum_regex)) return m[1].str();
     }
     return std::nullopt;
 }
@@ -960,7 +994,10 @@ int main(int argc, char** argv) {
     // ── Parsing des arguments ─────────────────────────────────────────────────
     const auto bridge_config_opt = parse_bridge_args(argc, argv, root);
     if (!bridge_config_opt) {
-        std::cerr << "Usage: ./spdz_bridge [--backend <name>] [--computation-nodes N] [program_path]\n";
+        std::cerr << "Usage: ./spdz_bridge [--backend <name>] [--computation-nodes N] "
+                     "[--input-prep masked-sum|none] [program_path]\n"
+                     "  masked-sum (default): Fig.2 masking + issue_secrets + Player-Data prep for sum.mpc-style programs.\n"
+                     "  none: skip secret issuance and Player-Data prep; use pre-populated Player-Data for any .mpc.\n";
         print_supported_backends();
         return 1;
     }
@@ -978,9 +1015,12 @@ int main(int argc, char** argv) {
               << "Family         : " << backend_family_name(backend->family)          << "\n"
               << "Preprocessing  : " << (backend->requires_preprocessing ? "yes" : "no") << "\n"
               << "SSL            : " << (backend->requires_ssl ? "yes" : "no")           << "\n"
-              << "Min parties    : " << backend->min_parties                          << "\n";
+              << "Min parties    : " << backend->min_parties                          << "\n"
+              << "Input prep     : "
+              << (config.input_prep == InputPrepMode::MaskedSum ? "masked-sum" : "none") << "\n"
+              << "Program        : " << config.program_path.string()                  << "\n";
 
-    // ── Gestion des secrets de providers ─────────────────────────────────────
+    // ── Gestion des secrets de providers (masquage Fig.2 uniquement) ──────────
     const int max_provider_id = []() {
         const char* env = std::getenv("MPC_MAX_PROVIDER_ID");
         if (!env || !*env) return 32;
@@ -990,13 +1030,19 @@ int main(int argc, char** argv) {
         } catch (...) { return 32; }
     }();
 
-    if (issue_provider_secrets(root, max_provider_id) != 0) return 1;
+    if (config.input_prep == InputPrepMode::MaskedSum) {
+        if (issue_provider_secrets(root, max_provider_id) != 0) return 1;
+    }
     const auto provider_secrets = read_provider_secrets(root);
 
     // ── Lecture du core set ───────────────────────────────────────────────────
     const auto core_set = read_core_set(core_set_path);
     if (core_set.empty()) {
-        std::cout << "No providers in core set. Secrets are issued and ready in provider_secrets/.\n";
+        if (config.input_prep == InputPrepMode::MaskedSum) {
+            std::cout << "No providers in core set. Secrets are issued and ready in provider_secrets/.\n";
+        } else {
+            std::cout << "No providers in core set. Populate core_set.txt to run a program.\n";
+        }
         return 0;
     }
 
@@ -1012,10 +1058,18 @@ int main(int argc, char** argv) {
 
     if (!validate_backend_party_count(*backend, n_parties)) return 1;
 
-    // ── Préparation des entrées sécurisées (shares + masked values) ───────────
+    // ── Préparation Player-Data (Fig.2) ou laisser l'appelant gérer (mode universel)
     cpp_int fallback_sum = 0;
-    if (!prepare_secure_inputs(mp_spdz_root, selected, provider_secrets, n_parties, fallback_sum))
-        return 1;
+    if (config.input_prep == InputPrepMode::MaskedSum) {
+        if (!prepare_secure_inputs(mp_spdz_root, selected, provider_secrets, n_parties, fallback_sum))
+            return 1;
+    } else {
+        for (const auto& p : selected) {
+            if (p.masked_value_str.empty()) {
+                fallback_sum += cpp_int(p.value);
+            }
+        }
+    }
 
     // ── Vérification du binaire backend ──────────────────────────────────────
     const fs::path backend_binary = get_backend_binary(mp_spdz_root, *backend);
@@ -1038,8 +1092,10 @@ int main(int argc, char** argv) {
     }
 
     // ── Compilation du programme MPC ──────────────────────────────────────────
+    // Le nom compilé suit compile.py : <stem>-<n_parties>-<n_selected>
     const std::string compiled_program_name =
-        "sum-" + std::to_string(n_parties) + "-" + std::to_string(selected.size());
+        config.program_path.stem().string() + "-" + std::to_string(n_parties) + "-" +
+        std::to_string(selected.size());
 
     if (!compile_program(mp_spdz_root, config.program_path, n_parties,
                          static_cast<int>(selected.size()),
@@ -1058,13 +1114,15 @@ int main(int argc, char** argv) {
     // ── Lecture du résultat ───────────────────────────────────────────────────
     const auto parsed_sum = backend->parse_result(logs_dir / "player_0.log");
     if (parsed_sum) {
-        std::cout << "MP-SPDZ result: SUM=" << *parsed_sum << "\n";
+        std::cout << "MP-SPDZ result: " << *parsed_sum << "\n";
     } else {
-        std::cout << "Could not parse SUM from MP-SPDZ logs. Fallback sum = "
+        std::cout << "Could not parse RESULT=/SUM= from MP-SPDZ logs. Fallback sum = "
                   << fallback_sum.convert_to<std::string>() << "\n";
     }
 
-    std::cout << "Per-provider secrets are managed in provider_secrets/ (bridge-issued).\n";
+    if (config.input_prep == InputPrepMode::MaskedSum) {
+        std::cout << "Per-provider secrets are managed in provider_secrets/ (bridge-issued).\n";
+    }
 
     if (!run_ok) {
         std::cout << "Some MP-SPDZ parties failed; fallback sum from validated inputs = "
