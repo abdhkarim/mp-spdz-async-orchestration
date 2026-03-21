@@ -1,0 +1,16 @@
+scenario:normal | PASS | expected success
+scenario:insufficient-acks | PASS | expected rejection
+scenario:replay-ack | PASS | expected success
+scenario:hash-mismatch | PASS | expected success
+scenario:stale-ack | PASS | expected rejection
+tampering:provider-file | PASS | proof mismatch rejected
+asynchrony:late-provider | PASS | late input excluded from decided core set
+backend:semi2k | PASS | MPC run succeeded
+backend:semi | PASS | MPC run succeeded
+backend:shamir | PASS | MPC run succeeded
+backend:replicated-ring | PASS | MPC run succeeded
+backend:replicated-field | PASS | MPC run succeeded
+backend:player-online | PASS | MPC run succeeded
+
+TOTAL_PASS=13
+TOTAL_FAIL=0

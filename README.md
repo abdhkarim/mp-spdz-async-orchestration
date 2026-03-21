@@ -11,7 +11,7 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 ## Objectifs du prototype
 
 - Simuler des crashes (participant absent).
-- Simuler des comportements malveillants simples (fichier mal formé).
+- Simuler des crashes et des validations d'intégrité côté consensus.
 - Produire une démo minimale de calcul MPC (addition).
 - Illustrer les difficultés d’intégration MP-SPDZ (offline/online, fichiers, lancement).
 
@@ -24,11 +24,11 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
 ### Zone 1 : Data Providers (asynchrone / instable)
 
 - Composant : `node/src/data_provider.cpp`
-- Exécutable : `./build/node/data_provider <id> <value> [--malformed]`
+- Exécutable : `./build/node/data_provider <id> <value>`
 - Rôle :
   - envoi d'une contribution individuelle,
   - crash simulé si le provider n'est pas lancé,
-  - comportement malveillant simulé via `--malformed`.
+  - écrit une contribution signée vérifiable par le consensus.
 - Trace concrète : fichiers `inputs/provider_<id>.txt`.
 
 ### Zone 2 : Arbitre / Consensus (frontière de synchronisation)
@@ -154,7 +154,28 @@ cmake -S . -B build
 cmake --build build -j4
 ```
 
-## Démo rapide (crash + malveillant + somme)
+## Windows + WSL (recommandé)
+
+Si tu développes sur Windows, utilise WSL pour toute la chaîne CMake/MP-SPDZ.
+
+Depuis PowerShell :
+
+```powershell
+wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
+```
+
+Ce script fait automatiquement :
+- `cmake ..`
+- `cmake --build . -j`
+- `./spdz_bridge/spdz_bridge`
+
+Tu peux aussi passer les arguments du bridge :
+
+```powershell
+wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
+```
+
+## Démo rapide (crash + somme)
 
 Depuis la racine du projet :
 
@@ -171,9 +192,6 @@ rm -rf inputs core_set.txt logs
 
 # ne pas lancer provider 3 -> crash simulé
 
-# provider malveillant (format invalide)
-./build/node/data_provider 4 999 --malformed
-
 # consensus (attente 3 secondes)
 ./build/consensus/consensus 3
 
@@ -182,8 +200,7 @@ rm -rf inputs core_set.txt logs
 ```
 
 Résultat attendu côté consensus :
-- `core_set.txt` contient `1` et `2`.
-- le provider mal formé est ignoré.
+- `core_set.txt` contient les providers valides lancés avant consensus (ex. `1` et `2` si `3` n'est pas lancé).
 
 ## Exécution MP-SPDZ complète (offline + online)
 
@@ -227,6 +244,45 @@ grep -R "SUM=" logs
 
 - Erreur `zsh: no matches found` sur un glob :
   - utiliser `ls logs` puis `grep -R "SUM=" logs`.
+
+## Orchestration asynchrone externe (Phase 1)
+
+Pour avancer vers un modèle "MP-SPDZ compute-only", le dépôt contient
+un orchestrateur externe qui pilote un round complet et produit des
+artefacts de décision.
+
+Commande (WSL/Linux) :
+
+```bash
+./scripts/run_async_round_wsl.sh \
+  --clean \
+  --session-id demo-session \
+  --round-id 0 \
+  --providers 1:10,2:20,3:30,4:40,5:50 \
+  --k-acks 2 \
+  --ack-nodes 3 \
+  --ack-timeout-seconds 2 \
+  --backend semi2k \
+  --computation-nodes 3
+```
+
+Artefacts générés :
+- `artifacts/run_meta.json`
+- `artifacts/core_set.json`
+- `artifacts/justification.json`
+- `artifacts/acks/ack_p*_cn*.json`
+- `artifacts/cn_keys/cn_*.pub.hex` et `cn_*.sec.hex` (signatures ACK Ed25519)
+
+Schémas JSON de référence :
+- `schemas/ack.schema.json`
+- `schemas/core_set.schema.json`
+- `schemas/justification.schema.json`
+
+Scénarios ACK négatifs (insufficient/replay/hash/stale) :
+
+```bash
+./scripts/test_ack_scenarios_wsl.sh
+```
 
 ## Limites
 

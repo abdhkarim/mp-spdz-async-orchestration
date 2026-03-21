@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/justification.schema.json",
+  "title": "Core Set Justification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "round_id",
+    "accepted",
+    "rejected"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "accepted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider_id", "reason"],
+        "properties": {
+          "provider_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider_id", "reason"],
+        "properties": {
+          "provider_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,17 +1,40 @@
-# Programme MPC minimal pour la démonstration :
-# - argument attendu : nombre de parties actives (taille du core set),
-# - une entrée secrète par partie,
-# - sortie publique de la somme.
-if len(program.args) < 2:
-    raise Exception("Usage: sum <num_parties>")
+# Programme MPC aligné avec Fig.2 (Input Supply):
+# - Les serveurs ne reçoivent pas s_i en clair.
+# - Chaque partie p fournit une part additive share_{p,i} de s_i.
+# - Les valeurs (x_i - s_i) restent publiques (broadcast client).
+# - Le MPC reconstruit <x_i> = (x_i - s_i) + <s_i>, puis somme les <x_i>.
 
-n = int(program.args[1])
+masked_payload = open("Player-Data/Public-Masked-Values").read().strip().splitlines()
+
+n_inputs = None
+if len(program.args) == 2:
+    # program.args[0] = "/.../programs/sum.mpc"
+    # program.args[1] = "<num_parties>"
+    n_parties = int(program.args[1])
+elif len(program.args) >= 3:
+    # program.args[1] = "<num_parties>"
+    # program.args[2] = "<num_inputs>"
+    n_parties = int(program.args[1])
+    n_inputs = int(program.args[2])
+else:
+    raise Exception("Usage: sum <num_parties> <num_inputs>")
+
+if n_inputs is None:
+    # If MP-SPDZ didn't pass num_inputs, infer it from the masked values file
+    n_inputs = len(masked_payload)
+
+if len(masked_payload) < n_inputs:
+    raise Exception("Invalid Player-Data/Public-Masked-Values content")
+
 total = sint(0)
 
-# On utilise une boucle Python (compile-time), car n est fourni à la compilation.
-for i in range(n):
-    # Lecture d'une valeur secrète depuis le fichier Input-P<i>-0.
-    total += sint.get_input_from(i)
+for i in range(n_inputs):
+    masked_value = int(masked_payload[i])
 
-# Convention de parsing côté bridge : rechercher la forme "SUM=<entier>".
-print_ln("RESULT=%s", c.reveal())
+    shared_secret_i = sint(0)
+    for p in range(n_parties):
+        shared_secret_i += sint.get_input_from(p)
+
+    total += sint(masked_value) + shared_secret_i
+
+print_ln("SUM=%s", total.reveal())
