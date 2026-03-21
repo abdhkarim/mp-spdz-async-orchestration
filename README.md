@@ -11,7 +11,7 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 ## Objectifs du prototype
 
 - Simuler des crashes (participant absent).
-- Simuler des crashes et des validations d'intégrité côté consensus.
+- Valider l'intégrité et l'authenticité des contributions côté consensus.
 - Produire une démo minimale de calcul MPC (addition).
 - Illustrer les difficultés d’intégration MP-SPDZ (offline/online, fichiers, lancement).
 
@@ -34,10 +34,10 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
 ### Zone 2 : Arbitre / Consensus (frontière de synchronisation)
 
 - Composant : `consensus/src/consensus.cpp`
-- Exécutable : `./build/consensus/consensus [timeout_seconds]`
+- Exécutable : `./build/consensus/consensus [min_inputs] [--acks-dir ... --k ... --session-id ... --round-id ... --timeout-seconds ...]`
 - Rôle :
-  - attend la fenêtre de collecte (timeout),
-  - valide le format des preuves/entrées reçues,
+  - lit les entrées providers et valide leurs preuves cryptographiques,
+  - en mode ACK, vérifie signatures/hashes/fraîcheur/anti-replay,
   - exclut les entrées absentes ou invalides,
   - décide le `core set`.
 - Trace concrète : fichier `core_set.txt` (un identifiant valide par ligne).
@@ -62,26 +62,25 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
 - Écrit un fichier `inputs/provider_<id>.txt`.
 - Format signé attendu :
   - `id=<id>`
-  - `value=<valeur>`
+  - `masked_value=<x_i - s_i>`
   - `nonce=<hex>`
   - `proof=<blake2b_hex>`
 - La preuve est calculée avec une clé partagée (`MPC_PROVIDER_SECRET`).
 
 ### `consensus/`
 - Exécutable `consensus`.
-- Attend un timeout fixe.
 - Lit `inputs/`, valide les fichiers.
 - Vérifie la preuve cryptographique (`proof`) pour chaque entrée.
-- Exclut les fichiers mal formés.
+- En mode ACK: applique le seuil `k` sur des ACK signés de CN distincts.
 - Écrit `core_set.txt` (un id par ligne).
 
 ### `spdz_bridge/`
 - Exécutable `spdz_bridge`.
 - Lit `core_set.txt`.
-- Génère les entrées MP-SPDZ dans `third_party/MP-SPDZ/Player-Data/Input-P*-0`.
+- Prépare `Player-Data/Public-Masked-Values` et `Player-Data/Input-P*-0`.
 - Compile `programs/sum.mpc`.
-- Tente de lancer MP-SPDZ online.
-- En cas d’échec runtime, affiche une somme de fallback calculée localement.
+- Lance le backend MP-SPDZ demandé (`semi2k`, `semi`, `shamir`, `replicated-ring`, `replicated-field`, `player-online`).
+- En cas d’échec runtime/setup, affiche une somme de fallback calculée localement.
 
 ### `programs/sum.mpc`
 - Lit `N` entrées secrètes (`N = taille du core set`).
@@ -115,10 +114,8 @@ mp-spdz-async-orchestration/ (racine du projet)
 │       └── spdz_bridge.cpp (prépare Input-P* + compile/run MP-SPDZ)
 ├── programs/ (programmes MPC)
 │   ├── sum.mpc (programme principal: somme des entrées)
-│   └── sanity_sum.mpc (fichier de sanity-check/réserve)
+│   └── issue_secrets.mpc (émission des secrets providers)
 ├── docs/ (docs architecture/protocole/threat model)
-├── tests/ (tests unitaires du prototype)
-│   └── CMakeLists.txt (cible de tests)
 ├── configs/ (fichiers de configuration de démo)
 ├── scripts/ (scripts utilitaires du projet)
 ├── others/ (assets annexes)
@@ -161,7 +158,7 @@ Si tu développes sur Windows, utilise WSL pour toute la chaîne CMake/MP-SPDZ.
 Depuis PowerShell :
 
 ```powershell
-wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
+wsl -e bash -lc "cd /mnt/d/cours/M2FSI/PFE/MPC/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
 ```
 
 Ce script fait automatiquement :
@@ -172,7 +169,7 @@ Ce script fait automatiquement :
 Tu peux aussi passer les arguments du bridge :
 
 ```powershell
-wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
+wsl -e bash -lc "cd /mnt/d/cours/M2FSI/PFE/MPC/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
 ```
 
 ## Démo rapide (crash + somme)
@@ -281,8 +278,11 @@ Schémas JSON de référence :
 Scénarios ACK négatifs (insufficient/replay/hash/stale) :
 
 ```bash
-./scripts/test_ack_scenarios_wsl.sh
+./scripts/full_system_validation_wsl.sh
 ```
+
+Rapport agrégé généré :
+- `backend_test_summary.txt`
 
 ## Limites
 
