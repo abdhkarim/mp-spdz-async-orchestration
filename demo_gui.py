@@ -54,7 +54,6 @@ class App:
         self.busy = False
 
         self.var_use_wsl = tk.IntVar(value=1 if os.name == "nt" else 0)
-        self.var_malformed = tk.IntVar(value=0)
         self.var_status = tk.StringVar(value="Idle")
         self.var_result = tk.StringVar(value="SUM: -")
         self.var_core_set = tk.StringVar(value="Core set: -")
@@ -79,10 +78,6 @@ class App:
         self.entry_val = tk.Entry(frm, width=12)
         self.entry_val.grid(row=1, column=3, sticky=tk.W)
         self.entry_val.insert(0, "10")
-
-        tk.Checkbutton(frm, text="malformed", variable=self.var_malformed).grid(
-            row=1, column=4, padx=5, sticky=tk.W
-        )
 
         tk.Label(frm, text="Consensus args:").grid(row=2, column=0, sticky=tk.W)
         self.entry_consensus_args = tk.Entry(frm, width=18)
@@ -220,12 +215,8 @@ class App:
             messagebox.showwarning("Input", err)
             return
 
-        malformed = self.var_malformed.get() == 1
-
         def task() -> None:
             args = ["./node/data_provider", provider_id, value]
-            if malformed:
-                args.append("--malformed")
             self.run_cmd(args, "provider")
 
         self._run_async(task)
@@ -276,10 +267,9 @@ class App:
             self.var_result.set("SUM: -")
             self.var_core_set.set("Core set: -")
 
-            # Scenario: 1=10, 2=3, 4=5 malformed, 3=1
+            # Scenario: valid providers, one crash simulated by absence.
             self.run_cmd(["./node/data_provider", "1", "10"], "provider")
             self.run_cmd(["./node/data_provider", "2", "3"], "provider")
-            self.run_cmd(["./node/data_provider", "4", "5", "--malformed"], "provider")
             self.run_cmd(["./node/data_provider", "3", "1"], "provider")
 
             rc_consensus, _ = self.run_cmd(["./consensus/consensus"], "consensus")

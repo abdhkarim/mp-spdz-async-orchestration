@@ -9,8 +9,7 @@
  * value so that the consensus node can verify the data has not been tampered
  * with in transit.
  *
- * Usage: ./data_provider <id> <value> [--malformed]
- *   --malformed : simulate a malicious provider (writes a corrupted file)
+ * Usage: ./data_provider <id> <value>
  */
 
 #include <chrono>
@@ -315,7 +314,6 @@ std::optional<std::string> read_provider_secret(const std::string& provider_id) 
 
 int write_provider_file(const std::string& id,
                         const std::string& value,
-                        bool malformed,
                         const std::string& auth_secret) {
     // --- Prepare output path ---
     const fs::path inputs_dir  = fs::current_path() / "inputs";
@@ -326,14 +324,6 @@ int write_provider_file(const std::string& id,
     if (!out.is_open()) {
         g_logger.error("Cannot open output file: " + output_file.string());
         return 1;
-    }
-
-    // --- Malformed mode: simulate a corrupted / attack provider ---
-    if (malformed) {
-        out << "this_file_is_malformed\n";
-        g_logger.warn("Wrote MALFORMED file for provider " + id +
-                      " (attack simulation)");
-        return 0;
     }
 
     // --- Compute masked value: x_i - s_i ---
@@ -385,17 +375,15 @@ int write_provider_file(const std::string& id,
 
 int main(int argc, char* argv[]) {
     // --- Parse command-line arguments ---
-    if (argc < 3 || argc > 4) {
-        std::cerr << "Usage: " << argv[0] << " <id> <value> [--malformed]\n"
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <id> <value>\n"
                   << "  <id>        provider identifier (alphanumeric, max 32 chars)\n"
-                  << "  <value>     integer value to share (max 64 chars)\n"
-                  << "  --malformed simulate a malicious provider\n";
+                  << "  <value>     integer value to share (max 64 chars)\n";
         return 1;
     }
 
     const std::string id       = argv[1];
     const std::string value    = argv[2];
-    const bool        malformed = (argc == 4 && std::string(argv[3]) == "--malformed");
 
     g_logger.info("=== Data Provider " + id + " starting ===");
 
@@ -424,7 +412,7 @@ int main(int argc, char* argv[]) {
         g_logger.warn("Using default auth secret — set MPC_PROVIDER_SECRET for production");
 
     // --- Write the provider input file ---
-    const int result = write_provider_file(id, value, malformed, auth_secret);
+    const int result = write_provider_file(id, value, auth_secret);
 
     if (result == 0)
         g_logger.info("=== Provider " + id + " finished successfully ===");

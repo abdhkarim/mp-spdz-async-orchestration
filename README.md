@@ -11,7 +11,7 @@ Le but est de montrer un enchaînement simple et fonctionnel :
 ## Objectifs du prototype
 
 - Simuler des crashes (participant absent).
-- Simuler des comportements malveillants simples (fichier mal formé).
+- Simuler des crashes et des validations d'intégrité côté consensus.
 - Produire une démo minimale de calcul MPC (addition).
 - Illustrer les difficultés d’intégration MP-SPDZ (offline/online, fichiers, lancement).
 
@@ -24,11 +24,11 @@ Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-
 ### Zone 1 : Data Providers (asynchrone / instable)
 
 - Composant : `node/src/data_provider.cpp`
-- Exécutable : `./build/node/data_provider <id> <value> [--malformed]`
+- Exécutable : `./build/node/data_provider <id> <value>`
 - Rôle :
   - envoi d'une contribution individuelle,
   - crash simulé si le provider n'est pas lancé,
-  - comportement malveillant simulé via `--malformed`.
+  - écrit une contribution signée vérifiable par le consensus.
 - Trace concrète : fichiers `inputs/provider_<id>.txt`.
 
 ### Zone 2 : Arbitre / Consensus (frontière de synchronisation)
@@ -175,7 +175,7 @@ Tu peux aussi passer les arguments du bridge :
 wsl -e bash -lc "cd /mnt/c/Users/Haroun/Desktop/projetfindetude/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
 ```
 
-## Démo rapide (crash + malveillant + somme)
+## Démo rapide (crash + somme)
 
 Depuis la racine du projet :
 
@@ -192,9 +192,6 @@ rm -rf inputs core_set.txt logs
 
 # ne pas lancer provider 3 -> crash simulé
 
-# provider malveillant (format invalide)
-./build/node/data_provider 4 999 --malformed
-
 # consensus (attente 3 secondes)
 ./build/consensus/consensus 3
 
@@ -203,8 +200,7 @@ rm -rf inputs core_set.txt logs
 ```
 
 Résultat attendu côté consensus :
-- `core_set.txt` contient `1` et `2`.
-- le provider mal formé est ignoré.
+- `core_set.txt` contient les providers valides lancés avant consensus (ex. `1` et `2` si `3` n'est pas lancé).
 
 ## Exécution MP-SPDZ complète (offline + online)
 
