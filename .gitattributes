@@ -1,0 +1,2 @@
+# Shell scripts must use LF so WSL/Linux shebangs work (avoid bash\r).
+*.sh text eol=lf

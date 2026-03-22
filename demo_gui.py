@@ -23,6 +23,8 @@ from tkinter import messagebox, scrolledtext
 
 PROJECT_ROOT = Path.cwd()
 BUILD_DIR = PROJECT_ROOT / "build"
+# All binaries must run with cwd = repo root (consensus/data_provider/bridge use cwd for inputs/, third_party/).
+RUN_CWD = PROJECT_ROOT
 
 ID_REGEX = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 INT_REGEX = re.compile(r"^[+-]?\d{1,64}$")
@@ -133,7 +135,7 @@ class App:
     def _native_run(self, args: list[str]) -> tuple[int, str]:
         completed = subprocess.run(
             args,
-            cwd=BUILD_DIR,
+            cwd=RUN_CWD,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -142,8 +144,8 @@ class App:
         return completed.returncode, completed.stdout
 
     def _wsl_run(self, args: list[str]) -> tuple[int, str]:
-        build_wsl = to_wsl_path(BUILD_DIR)
-        command = "cd " + shlex.quote(build_wsl) + " && " + " ".join(shlex.quote(a) for a in args)
+        repo_wsl = to_wsl_path(RUN_CWD)
+        command = "cd " + shlex.quote(repo_wsl) + " && " + " ".join(shlex.quote(a) for a in args)
         completed = subprocess.run(
             ["wsl", "-e", "bash", "-lc", command],
             stdout=subprocess.PIPE,
@@ -216,7 +218,7 @@ class App:
             return
 
         def task() -> None:
-            args = ["./node/data_provider", provider_id, value]
+            args = ["./build/node/data_provider", provider_id, value]
             self.run_cmd(args, "provider")
 
         self._run_async(task)
@@ -226,7 +228,7 @@ class App:
         extra_args = shlex.split(extra) if extra else []
 
         def task() -> None:
-            self.run_cmd(["./consensus/consensus", *extra_args], "consensus")
+            self.run_cmd(["./build/consensus/consensus", *extra_args], "consensus")
 
         self._run_async(task)
 
@@ -235,7 +237,7 @@ class App:
         extra_args = shlex.split(extra) if extra else []
 
         def task() -> None:
-            self.run_cmd(["./spdz_bridge/spdz_bridge", *extra_args], "bridge")
+            self.run_cmd(["./build/spdz_bridge/spdz_bridge", *extra_args], "bridge")
 
         self._run_async(task)
 
@@ -245,19 +247,20 @@ class App:
 
         def task() -> None:
             if self.var_use_wsl.get():
-                self.run_cmd(["bash", "-lc", "rm -rf inputs logs core_set.txt && mkdir -p inputs logs"], "reset")
+                self.run_cmd(
+                    ["bash", "-lc", "rm -rf inputs logs core_set.txt provider_secrets artifacts && mkdir -p inputs logs"],
+                    "reset",
+                )
             else:
-                inputs = BUILD_DIR / "inputs"
-                logs = BUILD_DIR / "logs"
-                core = BUILD_DIR / "core_set.txt"
-                if inputs.exists():
-                    subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(inputs)], check=False)
-                if logs.exists():
-                    subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(logs)], check=False)
+                for name in ("inputs", "logs", "provider_secrets", "artifacts"):
+                    p = RUN_CWD / name
+                    if p.exists():
+                        subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(p)], check=False)
+                core = RUN_CWD / "core_set.txt"
                 if core.exists():
                     core.unlink(missing_ok=True)
-                inputs.mkdir(parents=True, exist_ok=True)
-                logs.mkdir(parents=True, exist_ok=True)
+                (RUN_CWD / "inputs").mkdir(parents=True, exist_ok=True)
+                (RUN_CWD / "logs").mkdir(parents=True, exist_ok=True)
                 self.append("[reset] Workspace reset done\n\n")
 
         self._run_async(task)
@@ -268,16 +271,16 @@ class App:
             self.var_core_set.set("Core set: -")
 
             # Scenario: valid providers, one crash simulated by absence.
-            self.run_cmd(["./node/data_provider", "1", "10"], "provider")
-            self.run_cmd(["./node/data_provider", "2", "3"], "provider")
-            self.run_cmd(["./node/data_provider", "3", "1"], "provider")
+            self.run_cmd(["./build/node/data_provider", "1", "10"], "provider")
+            self.run_cmd(["./build/node/data_provider", "2", "3"], "provider")
+            self.run_cmd(["./build/node/data_provider", "3", "1"], "provider")
 
-            rc_consensus, _ = self.run_cmd(["./consensus/consensus"], "consensus")
+            rc_consensus, _ = self.run_cmd(["./build/consensus/consensus", "3"], "consensus")
             if rc_consensus != 0:
                 self.append("[scenario] Stopped: consensus failed\n\n")
                 return
 
-            rc_bridge, _ = self.run_cmd(["./spdz_bridge/spdz_bridge"], "bridge")
+            rc_bridge, _ = self.run_cmd(["./build/spdz_bridge/spdz_bridge"], "bridge")
             if rc_bridge == 0:
                 self.var_status.set("Scenario completed ✅")
             else:

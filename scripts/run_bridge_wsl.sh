@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Build from repo root, then run spdz_bridge with cwd = repo root (required:
+# bridge resolves inputs/, core_set.txt, third_party/MP-SPDZ via current_path()).
 
 set -euo pipefail
 
@@ -11,9 +13,9 @@ echo "[WSL] Build dir : ${BUILD_DIR}"
 
 mkdir -p "${BUILD_DIR}"
 
-cd "${BUILD_DIR}"
-cmake ..
-cmake --build . -j
+cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}"
+cmake --build "${BUILD_DIR}" -j
 
-echo "[WSL] Running spdz_bridge..."
-./spdz_bridge/spdz_bridge "$@"
+echo "[WSL] Running spdz_bridge from repo root..."
+cd "${REPO_ROOT}"
+exec "${BUILD_DIR}/spdz_bridge/spdz_bridge" "$@"
