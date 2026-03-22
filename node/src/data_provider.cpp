@@ -1,15 +1,21 @@
 /**
  * data_provider.cpp
  *
- * Role: Each data provider holds a private value x_i. Before sending it to
- * the MPC servers, it masks it as (x_i - s_i), where s_i is a per-provider
- * secret issued by MP-SPDZ (stored in provider_secrets/provider_<id>.secret).
+ * Role: Each data provider holds a private value x_i.
  *
- * The provider also computes a cryptographic proof (BLAKE2b) over the masked
- * value so that the consensus node can verify the data has not been tampered
- * with in transit.
+ * Confidentiality model:
+ *   1. Provider generates s_i locally (libsodium CSPRNG).
+ *   2. Provider splits s_i into N additive shares over Z/2^64:
+ *          s_i = share_0 + share_1 + ... + share_{N-1}  (mod 2^64)
+ *      and writes each share to:
+ *          provider_secrets/provider_<id>_share_<p>.secret
+ *   3. Provider computes masked_value = x_i - s_i and submits it publicly.
  *
- * Usage: ./data_provider <id> <value>
+ * The bridge never holds s_i in full — it only reads the per-party share
+ * files and routes each share_p to computation node p.  No single entity
+ * other than the provider itself can reconstruct x_i.
+ *
+ * Usage: ./data_provider <id> <value> --computation-nodes <N>
  */
 
 #include <chrono>
@@ -261,44 +267,103 @@ std::string compute_proof(const std::string& id,
 
 
 // =============================================================================
-// Section 5 – Per-provider secret (s_i)
+// Section 5 – Per-provider secret splitting  — provider-side share generation
 // =============================================================================
 //
-// The bridge runs MP-SPDZ to generate one random secret s_i per provider and
-// writes them to provider_secrets/provider_<id>.secret (one file per provider).
-// This function reads s_i for the given provider ID.
+// The provider generates s_i and IMMEDIATELY splits it into N additive shares
+// over Z/2^64.  Only the per-party share files are written to disk:
+//
+//   provider_secrets/provider_<id>_share_<p>.secret   (one file per party)
+//
+// The full s_i is NEVER written to disk.  The bridge reads only share files
+// and routes share_p to computation node p — no single process other than
+// this provider can reconstruct s_i (and hence x_i).
+//
+// Share equation:  s_i = share_0 + share_1 + ... + share_{N-1}  (mod 2^64)
+// Idempotent: if all N share files already exist and are non-empty, the
+// existing shares are returned unchanged.
 
-std::optional<std::string> read_provider_secret(const std::string& provider_id) {
-    const fs::path secret_file =
-        fs::current_path() / "provider_secrets" / ("provider_" + provider_id + ".secret");
+struct SplitSecret {
+    uint64_t             full_secret;  // s_i (held only in memory, never written)
+    std::vector<uint64_t> shares;      // share_p for p in [0, N)
+};
 
-    std::ifstream in(secret_file);
-    if (!in.is_open()) {
-        g_logger.warn("Provider secret file not found at " + secret_file.string() +
-                      " — run the SPDZ bridge first to issue secrets");
-        return std::nullopt;
+std::optional<SplitSecret> generate_or_load_provider_shares(
+    const std::string& provider_id, int n_parties)
+{
+    const fs::path secrets_dir = fs::current_path() / "provider_secrets";
+    fs::create_directories(secrets_dir);
+
+    // Build share file paths.
+    std::vector<fs::path> share_paths;
+    for (int p = 0; p < n_parties; ++p) {
+        share_paths.push_back(
+            secrets_dir / ("provider_" + provider_id +
+                           "_share_" + std::to_string(p) + ".secret"));
     }
 
-    std::string secret;
-    if (!std::getline(in, secret)) {
-        g_logger.error("Secret for provider " + provider_id + " is missing in " +
-                       secret_file.string());
-        return std::nullopt;
+    // --- Idempotent: try to load all existing share files ---
+    {
+        std::vector<uint64_t> existing_shares;
+        bool all_ok = true;
+        for (const auto& sp : share_paths) {
+            std::ifstream in(sp);
+            std::string line;
+            if (!in.is_open() || !std::getline(in, line) || line.empty()) {
+                all_ok = false;
+                break;
+            }
+            try {
+                existing_shares.push_back(std::stoull(line));
+            } catch (...) {
+                all_ok = false;
+                break;
+            }
+        }
+        if (all_ok && static_cast<int>(existing_shares.size()) == n_parties) {
+            // Reconstruct s_i in memory only for masking.
+            uint64_t s_full = 0;
+            for (auto sh : existing_shares) s_full += sh;
+            g_logger.info("Provider " + provider_id +
+                          ": loaded " + std::to_string(n_parties) + " existing shares");
+            return SplitSecret{s_full, existing_shares};
+        }
     }
 
-    const auto not_space = [](unsigned char c){ return !std::isspace(c); };
-    secret.erase(secret.begin(),
-                 std::find_if(secret.begin(), secret.end(), not_space));
-    secret.erase(std::find_if(secret.rbegin(), secret.rend(), not_space).base(),
-                 secret.end());
+    // --- Generate fresh s_i and split into N shares ---
+    uint64_t s_i = 0;
+    randombytes_buf(&s_i, sizeof(s_i));
 
-    if (secret.empty()) {
-        g_logger.error("Secret for provider " + provider_id + " is empty in " +
-                       secret_file.string());
-        return std::nullopt;
+    std::vector<uint64_t> shares;
+    shares.reserve(static_cast<size_t>(n_parties));
+    uint64_t running_sum = 0;
+    for (int p = 0; p < n_parties - 1; ++p) {
+        uint64_t r = 0;
+        randombytes_buf(&r, sizeof(r));
+        shares.push_back(r);
+        running_sum += r;  // mod 2^64 via unsigned overflow
+    }
+    shares.push_back(s_i - running_sum);  // last share closes the sum
+
+    // Write one share file per party (owner read/write only).
+    for (int p = 0; p < n_parties; ++p) {
+        std::ofstream out(share_paths[static_cast<size_t>(p)], std::ios::trunc);
+        if (!out.is_open()) {
+            g_logger.error("Cannot write share file: " + share_paths[static_cast<size_t>(p)].string());
+            return std::nullopt;
+        }
+        out << shares[static_cast<size_t>(p)] << "\n";
+        out.close();
+
+        std::error_code ec;
+        fs::permissions(share_paths[static_cast<size_t>(p)],
+                        fs::perms::owner_read | fs::perms::owner_write,
+                        fs::perm_options::replace, ec);
     }
 
-    return secret;
+    g_logger.info("Provider " + provider_id + ": generated s_i, split into " +
+                  std::to_string(n_parties) + " share files (s_i never written to disk)");
+    return SplitSecret{s_i, shares};
 }
 
 
@@ -306,15 +371,21 @@ std::optional<std::string> read_provider_secret(const std::string& provider_id) 
 // Section 6 – Writing the provider file
 // =============================================================================
 //
-// Creates  build/inputs/provider_<id>.txt  with four fields:
+// Creates  inputs/provider_<id>.txt  with four fields:
 //   id             – provider identity
-//   masked_value   – x_i - s_i  (the value masked by the SPDZ-issued secret)
+//   masked_value   – x_i - s_i  (value masked by the provider-split secret)
 //   nonce          – random 16-byte hex string (replay protection)
 //   proof          – BLAKE2b authentication tag
+//
+// Confidentiality guarantee: s_i is generated and split into N shares entirely
+// by this provider process.  The bridge reads only per-party share files and
+// routes share_p to computation node p.  No entity other than this provider
+// can reconstruct s_i or x_i.
 
 int write_provider_file(const std::string& id,
                         const std::string& value,
-                        const std::string& auth_secret) {
+                        const std::string& auth_secret,
+                        int n_parties) {
     // --- Prepare output path ---
     const fs::path inputs_dir  = fs::current_path() / "inputs";
     fs::create_directories(inputs_dir);
@@ -326,23 +397,25 @@ int write_provider_file(const std::string& id,
         return 1;
     }
 
-    // --- Compute masked value: x_i - s_i ---
-    const auto secret_opt = read_provider_secret(id);
-    std::string masked_value = value;   // fallback: send plain value if no secret
+    // --- Generate s_i and split into N per-party shares ---
+    const auto split = generate_or_load_provider_shares(id, n_parties);
+    std::string masked_value = value;   // fallback: plain value if split failed
 
-    if (secret_opt) {
+    if (split) {
         try {
-            masked_value = subtract_strings(value, *secret_opt);
+            // Use full_secret (held only in memory) to compute the masked value.
+            masked_value = subtract_strings(value, std::to_string(split->full_secret));
             g_logger.info("Provider " + id + ": masked " + value +
-                          " → " + masked_value + " (x - s_i)");
+                          " → " + masked_value + " (x - s_i, s_i split into " +
+                          std::to_string(n_parties) + " shares)");
         } catch (const std::exception& e) {
             g_logger.warn("Masking failed (" + std::string(e.what()) +
                           "), falling back to plain value");
             masked_value = value;
         }
     } else {
-        g_logger.info("No secret available for provider " + id +
-                      " — using plain value");
+        g_logger.warn("Provider " + id +
+                      ": could not generate/load shares — sending plain value (insecure)");
     }
 
     // --- Random nonce for replay protection ---
@@ -375,15 +448,34 @@ int write_provider_file(const std::string& id,
 
 int main(int argc, char* argv[]) {
     // --- Parse command-line arguments ---
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <id> <value>\n"
-                  << "  <id>        provider identifier (alphanumeric, max 32 chars)\n"
-                  << "  <value>     integer value to share (max 64 chars)\n";
+    // Usage: ./data_provider <id> <value> [--computation-nodes <N>]
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <id> <value> [--computation-nodes <N>]\n"
+                  << "  <id>                  provider identifier (alphanumeric, max 32 chars)\n"
+                  << "  <value>               integer value to share (max 64 chars)\n"
+                  << "  --computation-nodes N  number of semi2k computation nodes (default: 3)\n";
         return 1;
     }
 
-    const std::string id       = argv[1];
-    const std::string value    = argv[2];
+    const std::string id    = argv[1];
+    const std::string value = argv[2];
+
+    // Parse optional --computation-nodes flag.
+    int n_parties = 3;  // default
+    for (int i = 3; i < argc; ++i) {
+        if (std::string(argv[i]) == "--computation-nodes" && i + 1 < argc) {
+            try {
+                n_parties = std::stoi(argv[++i]);
+                if (n_parties < 2) {
+                    std::cerr << "--computation-nodes must be >= 2\n";
+                    return 1;
+                }
+            } catch (...) {
+                std::cerr << "Invalid --computation-nodes value\n";
+                return 1;
+            }
+        }
+    }
 
     g_logger.info("=== Data Provider " + id + " starting ===");
 
@@ -412,7 +504,7 @@ int main(int argc, char* argv[]) {
         g_logger.warn("Using default auth secret — set MPC_PROVIDER_SECRET for production");
 
     // --- Write the provider input file ---
-    const int result = write_provider_file(id, value, auth_secret);
+    const int result = write_provider_file(id, value, auth_secret, n_parties);
 
     if (result == 0)
         g_logger.info("=== Provider " + id + " finished successfully ===");

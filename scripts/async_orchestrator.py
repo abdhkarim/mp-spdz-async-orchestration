@@ -119,11 +119,6 @@ def main() -> int:
         help="Comma-separated id:value list, e.g. 1:10,2:20,3:30",
     )
     parser.add_argument(
-        "--backend",
-        default="semi2k",
-        help="MP-SPDZ backend passed to spdz_bridge (default: semi2k)",
-    )
-    parser.add_argument(
         "--computation-nodes",
         type=int,
         default=3,
@@ -210,7 +205,7 @@ def main() -> int:
         "session_id": args.session_id,
         "round_id": args.round_id,
         "started_at_unix_ms": now_ms,
-        "backend": args.backend,
+        "backend": "semi2k",
         "computation_nodes": args.computation_nodes,
         "providers": [p.__dict__ for p in providers],
     }
@@ -218,7 +213,8 @@ def main() -> int:
 
     for p in providers:
         run_command(
-            [str(build_dir / "node" / "data_provider"), str(p.provider_id), str(p.value)],
+            [str(build_dir / "node" / "data_provider"), str(p.provider_id), str(p.value),
+             "--computation-nodes", str(args.computation_nodes)],
             cwd=repo_root,
             env=os.environ.copy(),
         )
@@ -332,8 +328,6 @@ def main() -> int:
     run_command(
         [
             str(build_dir / "spdz_bridge" / "spdz_bridge"),
-            "--backend",
-            args.backend,
             "--computation-nodes",
             str(args.computation_nodes),
         ],

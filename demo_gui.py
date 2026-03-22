@@ -87,11 +87,11 @@ class App:
         tk.Label(frm, text="Bridge args:").grid(row=2, column=2, sticky=tk.W)
         self.entry_bridge_args = tk.Entry(frm, width=22)
         self.entry_bridge_args.grid(row=2, column=3, columnspan=2, sticky=tk.W)
-        self.entry_bridge_args.insert(0, "--backend player-online")
+        self.entry_bridge_args.insert(0, "--computation-nodes 3")
 
         tk.Label(
             frm,
-            text="Ex: consensus='2' | bridge='--backend semi2k --computation-nodes 3'",
+            text="Ex: consensus='2' | bridge='--computation-nodes 3 programs/avg.mpc'",
             fg="gray",
             anchor="w",
             justify=tk.LEFT,
