@@ -28,6 +28,7 @@
 #include <sodium.h>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
