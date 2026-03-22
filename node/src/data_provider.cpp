@@ -17,7 +17,6 @@
  *
  * Usage: ./data_provider <id> <value> --computation-nodes <N>
  */
-
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>

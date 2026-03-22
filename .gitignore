@@ -63,3 +63,12 @@ __pycache__/
 # Editor / OS noise
 .DS_Store
 Thumbs.db
+
+# Local test run logs (full integration runs)
+.tmp_full_test_runs/
+
+# Cursor / local tooling (not part of the project tree)
+.cursorignore
+.cursorindexingignore
+/artifacts/
+/build-win/

@@ -3,14 +3,14 @@ scenario:insufficient-acks | PASS | expected rejection
 scenario:replay-ack | PASS | expected success
 scenario:hash-mismatch | PASS | expected success
 scenario:stale-ack | PASS | expected rejection
-tampering:provider-file | PASS | proof mismatch rejected
-asynchrony:late-provider | PASS | late input excluded from decided core set
-backend:semi2k | PASS | MPC run succeeded
-backend:semi | PASS | MPC run succeeded
-backend:shamir | PASS | MPC run succeeded
-backend:replicated-ring | PASS | MPC run succeeded
-backend:replicated-field | PASS | MPC run succeeded
-backend:player-online | PASS | MPC run succeeded
+tampering:provider-file | PASS | proof mismatch rejected by consensus
+asynchrony:late-provider | PASS | late input correctly excluded from core set
+confidentiality:masking | PASS | no plain values; per-party share files verified
+semi2k:sum | PASS | result=42 (expected 42)
+semi2k:avg | PASS | result=14 (expected 14)
+semi2k:triple_sum | PASS | result=126 (expected 126)
+semi2k:parity_sum | PASS | result=0 (expected 0)
+crash:provider-absent | PASS | core set={1,2}, result=300 correct
 
 TOTAL_PASS=13
 TOTAL_FAIL=0

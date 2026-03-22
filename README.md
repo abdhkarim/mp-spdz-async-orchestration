@@ -6,13 +6,13 @@ Enchaînement :
 
 1. Les fournisseurs envoient des valeurs (fichiers + preuve BLAKE2b).
 2. Le **consensus** décide le **core set** (entrées valides).
-3. Le **bridge** prépare `Player-Data` pour **semi2k**, compile le `.mpc` et lance **`semi2k-party.x`** sur ce core set.
+3. Le **bridge** prépare `Player-Data` pour **semi2k**, compile le **programme `.mpc` choisi`** et lance **`semi2k-party.x`** sur ce core set.
 
 ## Objectifs du prototype
 
 - Simuler des absences (provider non soumis).
 - Valider intégrité et authenticité des contributions côté consensus (preuve BLAKE2b + option ACK Ed25519).
-- Démo MPC : somme, moyenne, etc. sur le core set.
+- Démo MPC sur le core set : **n’importe quel programme semi2k** fourni dans `programs/` (somme, moyenne, etc.).
 - Montrer l’intégration MP-SPDZ (fichiers `Player-Data`, `compile.py`, exécution en ligne semi2k).
 
 ## Architecture
@@ -52,14 +52,14 @@ Sans `--acks-dir` : validation des preuves sur `inputs/` et besoin d’**au moin
 |--------|--------|
 | Code | `spdz_bridge/src/spdz_bridge.cpp`, `spdz_bridge/src/semi2k_prep.cpp` |
 | Binaire | `./build/spdz_bridge/spdz_bridge [--computation-nodes N] [chemin/vers/programme.mpc]` |
-| Défaut programme | `programs/sum.mpc` (chemin relatif à la racine du dépôt) |
+| Programme MPC | **Chemin optionnel** vers un fichier `.mpc` (souvent sous `programs/`). Si omis : défaut **`programs/sum.mpc`**. Tu peux enchaîner `avg.mpc`, `triple_sum.mpc`, `parity_sum.mpc`, ou tout autre programme semi2k compatible avec les mêmes entrées (voir chaque fichier dans `programs/`). |
 | Backend | **Uniquement semi2k** (\(\mathbb{Z}/2^{64}\mathbb{Z}\)) — pas d’option `--backend` |
 
 Le bridge :
 
 - lit `core_set.txt` et les `inputs/provider_*.txt` ;
 - écrit sous `third_party/MP-SPDZ/Player-Data/` : `Public-Masked-Values` et `Input-P*-0` ;
-- exécute `python3 compile.py -R 64 …` dans `third_party/MP-SPDZ` en pointant vers le fichier `.mpc` du dépôt ;
+- exécute `python3 compile.py -R 64 …` dans `third_party/MP-SPDZ` en pointant vers le **fichier `.mpc` demandé** (n’importe quel programme du dossier `programs/` ou chemin absolu) ;
 - lance **`third_party/MP-SPDZ/semi2k-party.x`** pour chaque partie (ports `-pn`, hôte `localhost` pour \(p>0\)).
 
 Résultat attendu dans `logs/player_0.log` : lignes `SUM=…` ou `RESULT=…` ; le bridge affiche alors `MP-SPDZ result: …`.
@@ -158,7 +158,7 @@ Exemple (adapter le chemin) :
 wsl -e bash -lc "cd /chemin/vers/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --computation-nodes 2"
 ```
 
-Pas d’option `--backend` : le bridge ne prend que `--computation-nodes` et un chemin optionnel vers un `.mpc`.
+Pas d’option `--backend` : le bridge prend `--computation-nodes` et un **chemin optionnel vers un `.mpc`** (ex. `programs/avg.mpc`). Sans second argument, il utilise **`programs/sum.mpc`**.
 
 ### Interface graphique optionnelle
 
@@ -166,7 +166,7 @@ Pas d’option `--backend` : le bridge ne prend que `--computation-nodes` et un 
 python3 demo_gui.py
 ```
 
-À lancer **depuis la racine du dépôt** après compilation. Les commandes utilisent `./build/...` avec `cwd` = racine du projet.
+À lancer **depuis la racine du dépôt** après compilation. `demo_gui.py` propose plusieurs **onglets** : flux manuel (zones 1→3), **orchestrateur ACK** (`async_orchestrator.py`), **scénarios de sécurité** (altération BLAKE2b, provider tardif, confidentialité du masquage, crash, matrice de programmes `.mpc`), et **intégration** (lancement de `scripts/full_system_validation_wsl.sh`). Les commandes utilisent `./build/...` avec `cwd` = racine du projet.
 
 ## Démo rapide (2 providers, 3ᵉ absent)
 
@@ -184,13 +184,15 @@ mkdir -p inputs logs artifacts provider_secrets
 ./build/consensus/consensus 2
 
 ./build/spdz_bridge/spdz_bridge --computation-nodes 2
+# autre programme (ex. moyenne) :
+# ./build/spdz_bridge/spdz_bridge --computation-nodes 2 programs/avg.mpc
 ```
 
 Ne pas appeler `consensus 3` avec seulement deux fichiers provider valides : échec (« pas assez d’entrées ») et pas de `core_set.txt`.
 
 ## Orchestration asynchrone (`async_orchestrator.py`)
 
-`scripts/run_async_round_wsl.sh` compile les binaires nécessaires puis appelle l’orchestrateur. **Il n’y a pas d’option `--backend`** (le champ `backend: semi2k` dans `artifacts/run_meta.json` est informatif).
+`scripts/run_async_round_wsl.sh` compile les binaires nécessaires puis appelle l’orchestrateur. **Il n’y a pas d’option `--backend`** (le champ `backend: semi2k` dans `artifacts/run_meta.json` est informatif). L’orchestrateur lance le bridge **sans** argument de programme : exécution du défaut **`programs/sum.mpc`**. Pour un autre `.mpc`, lancer `spdz_bridge` manuellement avec le chemin voulu après le round.
 
 ```bash
 ./scripts/run_async_round_wsl.sh \
