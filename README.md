@@ -1,254 +1,180 @@
-# MPC Asynchrone avec Core Set via Consensus Externe
+# MPC asynchrone avec core set via consensus externe
 
-Ce dépôt contient un prototype académique de calcul multipartite sécurisé (MPC)
-intégrant MP-SPDZ sans modifier son code source.
+Prototype académique de calcul multipartite sécurisé (MPC) branché sur **MP-SPDZ** sans modifier les sources de MP-SPDZ.
 
-Le but est de montrer un enchaînement simple et fonctionnel :
-1. des fournisseurs envoient des valeurs,
-2. un consensus centralisé décide le core set (participants valides),
-3. MP-SPDZ exécute la somme uniquement sur ce core set.
+Enchaînement :
+
+1. Les fournisseurs envoient des valeurs (fichiers + preuve BLAKE2b).
+2. Le **consensus** décide le **core set** (entrées valides).
+3. Le **bridge** prépare `Player-Data` pour **semi2k**, compile le `.mpc` et lance **`semi2k-party.x`** sur ce core set.
 
 ## Objectifs du prototype
 
-- Simuler des crashes (participant absent).
-- Valider l'intégrité et l'authenticité des contributions côté consensus.
-- Produire une démo minimale de calcul MPC (addition).
-- Illustrer les difficultés d’intégration MP-SPDZ (offline/online, fichiers, lancement).
+- Simuler des absences (provider non soumis).
+- Valider intégrité et authenticité des contributions côté consensus (preuve + option ACK).
+- Démo MPC : somme, moyenne, etc. sur le core set.
+- Montrer l’intégration MP-SPDZ (fichiers `Player-Data`, compilation `compile.py`, exécution en ligne).
 
 ## Architecture
+
 ![Architecture hybride MPC avec core set](./others/architecture.png)
-## Correspondance avec l'architecture (Zone 1 / 2 / 3)
 
-Cette section fait le lien direct avec le schéma "Architecture Hybride: Server-Side MPC avec Consensus (Core Set)".
+### Zone 1 — Data providers (asynchrone)
 
-### Zone 1 : Data Providers (asynchrone / instable)
+| Élément | Détail |
+|--------|--------|
+| Code | `node/src/data_provider.cpp` |
+| Binaire | `./build/node/data_provider <id> <valeur> [--computation-nodes N]` |
+| Défaut | `--computation-nodes` vaut **3** si omis |
+| Sortie | `inputs/provider_<id>.txt` (id, valeur masquée, nonce, preuve BLAKE2b) |
+| Secret | Partage additif de \(s_i\) dans `provider_secrets/` (un fichier de part par partie MPC) |
 
-- Composant : `node/src/data_provider.cpp`
-- Exécutable : `./build/node/data_provider <id> <value>`
-- Rôle :
-  - envoi d'une contribution individuelle,
-  - crash simulé si le provider n'est pas lancé,
-  - écrit une contribution signée vérifiable par le consensus.
-- Trace concrète : fichiers `inputs/provider_<id>.txt`.
+Variable optionnelle : `MPC_PROVIDER_SECRET` (sinon secret de démo partagé).
 
-### Zone 2 : Arbitre / Consensus (frontière de synchronisation)
+### Zone 2 — Consensus
 
-- Composant : `consensus/src/consensus.cpp`
-- Exécutable : `./build/consensus/consensus [min_inputs] [--acks-dir ... --k ... --session-id ... --round-id ... --timeout-seconds ...]`
-- Rôle :
-  - lit les entrées providers et valide leurs preuves cryptographiques,
-  - en mode ACK, vérifie signatures/hashes/fraîcheur/anti-replay,
-  - exclut les entrées absentes ou invalides,
-  - décide le `core set`.
-- Trace concrète : fichier `core_set.txt` (un identifiant valide par ligne).
+| Élément | Détail |
+|--------|--------|
+| Code | `consensus/src/consensus.cpp` |
+| Binaire | `./build/consensus/consensus [min_inputs] [options ACK…]` |
+| Sortie | `core_set.txt` (un identifiant de provider par ligne) |
 
-### Zone 3 : Computation Nodes (synchrone / stable)
+Sans `--acks-dir`, le consensus valide les preuves sur les fichiers `inputs/` et exige **au moins `min_inputs` entrées valides** pour écrire `core_set.txt`. Avec `--acks-dir`, mode ACK (seuil `--k`, etc.).
 
-- Composants :
-  - `spdz_bridge/src/spdz_bridge.cpp`
-  - `programs/sum.mpc`
-  - runtime MP-SPDZ dans `third_party/MP-SPDZ`
-- Rôle :
-  - conversion du core set en parties MP-SPDZ actives,
-  - préparation des fichiers `Player-Data/Input-P*-0`,
-  - compilation/exécution du programme MPC,
-  - calcul synchrone sur les seules parties retenues.
-- Trace concrète :
-  - logs d'exécution,
-  - sortie `SUM=<valeur>`.
+### Zone 3 — Bridge MP-SPDZ (semi2k uniquement)
 
-### `node/` (data providers)
-- Exécutable `data_provider`.
-- Écrit un fichier `inputs/provider_<id>.txt`.
-- Format signé attendu :
-  - `id=<id>`
-  - `masked_value=<x_i - s_i>`
-  - `nonce=<hex>`
-  - `proof=<blake2b_hex>`
-- La preuve est calculée avec une clé partagée (`MPC_PROVIDER_SECRET`).
+| Élément | Détail |
+|--------|--------|
+| Code | `spdz_bridge/src/spdz_bridge.cpp`, `spdz_bridge/src/semi2k_prep.cpp` |
+| Binaire | `./build/spdz_bridge/spdz_bridge [--computation-nodes N] [chemin/vers/programme.mpc]` |
+| Défaut programme | `programs/sum.mpc` |
+| Backend | **Uniquement semi2k** (anneau \(\mathbb{Z}/2^{64}\mathbb{Z}\)) — pas de sélection `--backend` |
 
-### `consensus/`
-- Exécutable `consensus`.
-- Lit `inputs/`, valide les fichiers.
-- Vérifie la preuve cryptographique (`proof`) pour chaque entrée.
-- En mode ACK: applique le seuil `k` sur des ACK signés de CN distincts.
-- Écrit `core_set.txt` (un id par ligne).
+Le bridge :
 
-### `spdz_bridge/`
-- Exécutable `spdz_bridge`.
-- Lit `core_set.txt`.
-- Prépare `Player-Data/Public-Masked-Values` et `Player-Data/Input-P*-0`.
-- Compile `programs/sum.mpc`.
-- Lance le backend MP-SPDZ demandé (`semi2k`, `semi`, `shamir`, `replicated-ring`, `replicated-field`, `player-online`).
-- En cas d’échec runtime/setup, affiche une somme de fallback calculée localement.
+- lit `core_set.txt` et les `inputs/provider_*.txt` ;
+- écrit `Player-Data/Public-Masked-Values` et les entrées par partie (`Input-P*-0`) via la préparation semi2k externe ;
+- appelle `python3 compile.py -R 64 …` dans `third_party/MP-SPDZ` ;
+- lance **`third_party/MP-SPDZ/semi2k-party.x`** pour chaque partie.
 
-### `programs/sum.mpc`
-- Lit `N` entrées secrètes (`N = taille du core set`).
-- Calcule la somme.
-- Révèle `SUM=<résultat>`.
+Résultat attendu dans `logs/player_0.log` : lignes `SUM=…` ou `RESULT=…` ; le bridge affiche alors `MP-SPDZ result: …`.
 
+En cas d’échec de compilation ou d’exécution, ou si `semi2k-party.x` est absent, un message de secours peut s’afficher **sans** ligne `MP-SPDZ result:` (voir dépannage).
 
-## Arborescence
+### Programmes MPC (`programs/`)
+
+| Fichier | Rôle |
+|---------|------|
+| `sum.mpc` | Somme des entrées → `SUM=…` |
+| `avg.mpc` | Moyenne → `RESULT=…` |
+| `triple_sum.mpc` | Somme triple → `RESULT=…` |
+| `parity_sum.mpc` | Parité de la somme → `RESULT=…` |
+
+Il n’y a **pas** de `issue_secrets.mpc` dans ce dépôt : le masquage et les parts sont gérés côté C++ (`data_provider`, `semi2k_prep`).
+
+## Arborescence (principale)
 
 ```text
-mp-spdz-async-orchestration/ (racine du projet)
-├── core_set.txt (sortie du consensus, généré à l'exécution)
-├── common/ (code C++ partagé)
-│   ├── CMakeLists.txt (build du module common)
-│   ├── include/common/ (headers partagés: types/messages/api)
-│   └── src/ (implémentations utilitaires/stubs)
-├── node/ (Zone 1: data providers)
-│   ├── CMakeLists.txt (build de data_provider)
-│   ├── include/node/ (headers du module)
-│   └── src/
-│       └── data_provider.cpp (écrit inputs/provider_<id>.txt)
-├── consensus/ (Zone 2: arbitre / décision du core set)
-│   ├── CMakeLists.txt (build de consensus)
-│   ├── include/consensus/ (headers du module)
-│   └── src/
-│       └── consensus.cpp (timeout + validation + génération core_set.txt)
-├── spdz_bridge/ (Zone 3: interface vers MP-SPDZ)
-│   ├── CMakeLists.txt (build de spdz_bridge)
-│   ├── include/spdz_bridge/ (headers du module)
-│   └── src/
-│       └── spdz_bridge.cpp (prépare Input-P* + compile/run MP-SPDZ)
-├── programs/ (programmes MPC)
-│   ├── sum.mpc (programme principal: somme des entrées)
-│   └── issue_secrets.mpc (émission des secrets providers)
-├── docs/ (docs architecture/protocole/threat model)
-├── configs/ (fichiers de configuration de démo)
-├── scripts/ (scripts utilitaires du projet)
-├── others/ (assets annexes)
-│   └── architecture.png (image utilisée dans le README)
-├── third_party/ (dépendances externes)
-│   └── MP-SPDZ/ (sous-module MP-SPDZ non modifié)
-├── build/ (artefacts de compilation CMake, généré)
-│   ├── node/data_provider (binaire provider)
-│   ├── consensus/consensus (binaire consensus)
-│   └── spdz_bridge/spdz_bridge (binaire bridge)
-├── inputs/ (entrées providers, généré pendant la démo)
-│   └── provider_<id>.txt (valeur d'un provider)
-└── logs/ (logs d'exécution bridge, généré)
-    └── player_<party>.log (sortie de chaque partie MP-SPDZ)
+mp-spdz-async-orchestration/
+├── CMakeLists.txt
+├── common/                 # code partagé
+├── node/                   # data_provider
+├── consensus/              # consensus (+ ack_crypto_tool)
+├── spdz_bridge/            # bridge semi2k
+├── programs/               # .mpc (sum, avg, triple_sum, parity_sum)
+├── scripts/                # orchestration, tests intégration
+├── schemas/                # schémas JSON (ACK, core set, justification)
+├── docs/                   # notes d’architecture / protocole
+├── others/                 # assets (ex. architecture.png)
+├── third_party/MP-SPDZ/    # clone MP-SPDZ (à compiler : semi2k-party.x)
+├── build/                  # sortie CMake (généré)
+├── inputs/                 # généré à l’exécution
+├── logs/                   # logs parties MP-SPDZ
+├── provider_secrets/       # parts par provider (généré)
+├── core_set.txt            # sortie consensus (généré)
+└── artifacts/              # JSON d’orchestration (mode ACK)
 ```
 
 ## Prérequis
 
-- macOS/Linux avec CMake et compilateur C++20.
-- `libsodium` (utilisé pour la preuve cryptographique BLAKE2b).
-- MP-SPDZ présent dans `third_party/MP-SPDZ`.
-- Pour l’exécution complète MP-SPDZ (offline+online) :
-  - `Player-Online.x`
-  - `Fake-Offline.x`
-- `grep` suffit pour les vérifications (pas besoin de `rg`).
+- **CMake** ≥ 3.20, compilateur **C++20**
+- **pkg-config** et **libsodium** (preuves BLAKE2b)
+- **Python 3** (invocation de `compile.py` dans MP-SPDZ)
+- Copie de **MP-SPDZ** dans `third_party/MP-SPDZ`, puis compilation du binaire **`semi2k-party.x`** (indispensable pour une vraie exécution MPC via le bridge)
 
-## Compilation du prototype C++
+La chaîne **Player-Online.x / Fake-Offline.x** décrite dans la doc amont MP-SPDZ **n’est pas** utilisée par ce prototype pour le flux semi2k courant (préparation externalisée dans le bridge).
 
-Depuis la racine du projet :
+## Compiler le projet C++
+
+À la racine du dépôt :
 
 ```bash
 cmake -S . -B build
 cmake --build build -j4
 ```
 
-## Windows + WSL (recommandé)
+Cibles utiles : `data_provider`, `consensus`, `ack_crypto_tool`, `spdz_bridge`.
 
-Si tu développes sur Windows, utilise WSL pour toute la chaîne CMake/MP-SPDZ.
+## Compiler MP-SPDZ (obligatoire pour le bridge)
 
-Depuis PowerShell :
+À partir de la racine du dépôt, après avoir cloné [MP-SPDZ](https://github.com/data61/MP-SPDZ) dans `third_party/MP-SPDZ` :
+
+```bash
+cd third_party/MP-SPDZ
+# Suivre README MP-SPDZ pour dépendances (g++, make, libsodium, etc.)
+make -j4 semi2k-party.x
+```
+
+Vérification :
+
+```bash
+test -f third_party/MP-SPDZ/semi2k-party.x && echo OK
+```
+
+Sans ce fichier, le bridge affiche `semi2k-party.x not found` et ne produit pas `MP-SPDZ result:`.
+
+## Windows + WSL
+
+Développer et exécuter sous **WSL** pour la cohérence avec CMake, bash et MP-SPDZ.
+
+Exemple depuis PowerShell (adapter le chemin) :
 
 ```powershell
-wsl -e bash -lc "cd /mnt/d/cours/M2FSI/PFE/MPC/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
+wsl -e bash -lc "cd /chemin/vers/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh"
 ```
 
-Ce script fait automatiquement :
-- `cmake ..`
-- `cmake --build . -j`
-- `./spdz_bridge/spdz_bridge`
-
-Tu peux aussi passer les arguments du bridge :
+`run_bridge_wsl.sh` configure `build/`, compile, puis lance `spdz_bridge` avec les **mêmes arguments** que le binaire (pas de `--backend`). Exemple :
 
 ```powershell
-wsl -e bash -lc "cd /mnt/d/cours/M2FSI/PFE/MPC/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --backend semi2k --computation-nodes 3"
+wsl -e bash -lc "cd /chemin/vers/mp-spdz-async-orchestration && ./scripts/run_bridge_wsl.sh --computation-nodes 2"
 ```
 
-## Démo rapide (crash + somme)
+## Démo rapide (2 providers, « crash » du 3ᵉ)
 
-Depuis la racine du projet :
+Le consensus doit demander **2** entrées si seuls les providers 1 et 2 sont lancés. Aligner le nombre de parties MPC avec `--computation-nodes 2`.
 
 ```bash
-# Optionnel: fixer la même clé partagée côté providers et consensus
-# (sinon la valeur par défaut "mpc-demo-secret" est utilisée partout)
-export MPC_PROVIDER_SECRET="mpc-demo-secret"
+export MPC_PROVIDER_SECRET="mpc-demo-secret"   # optionnel
 
-rm -rf inputs core_set.txt logs
+rm -rf inputs logs artifacts core_set.txt provider_secrets
+mkdir -p inputs logs artifacts provider_secrets
 
-# providers valides
-./build/node/data_provider 1 7
-./build/node/data_provider 2 15
+./build/node/data_provider 1 7 --computation-nodes 2
+./build/node/data_provider 2 15 --computation-nodes 2
+# provider 3 volontairement absent
 
-# ne pas lancer provider 3 -> crash simulé
+./build/consensus/consensus 2
 
-# consensus (attente 3 secondes)
-./build/consensus/consensus 3
-
-# bridge (préparation inputs MP-SPDZ + compilation programme)
-./build/spdz_bridge/spdz_bridge
+./build/spdz_bridge/spdz_bridge --computation-nodes 2
 ```
 
-Résultat attendu côté consensus :
-- `core_set.txt` contient les providers valides lancés avant consensus (ex. `1` et `2` si `3` n'est pas lancé).
+Attendu : `core_set.txt` contient `1` et `2` ; sortie du bridge avec `MP-SPDZ result:` cohérente avec la somme des valeurs du core set (si `semi2k-party.x` est compilé).
 
-## Exécution MP-SPDZ complète (offline + online)
+**Ne pas** utiliser `./build/consensus/consensus 3` avec seulement deux fichiers provider : le consensus échoue (pas assez d’entrées) et ne crée pas `core_set.txt`.
 
-Depuis `third_party/MP-SPDZ` :
+## Orchestration asynchrone (script Python)
 
-```bash
-# une seule fois si nécessaire
-echo 'MY_CFLAGS += -DINSECURE' >> CONFIG.mine
-make clean
-make -j4 Fake-Offline.x Player-Online.x
-
-# génération des certificats + preprocessing
-rm -rf Player-Data/2-p-128
-./Scripts/setup-online.sh 2 128 0 10000
-
-# vérification clé
-ls -l Player-Data/2-p-128/Params-Data
-
-# exécution online du programme compilé (sum-2)
-./Scripts/run-online.sh sum-2 -N 2
-```
-
-Résultat attendu :
-- affichage terminal : `SUM=22`
-
-Vérification dans les logs MP-SPDZ :
-
-```bash
-grep -R "SUM=" logs
-```
-
-## Dépannage
-
-- Erreur `no modulus in Player-Data//2-p-128/Params-Data` :
-  - `Fake-Offline.x` n’a pas généré correctement le preprocessing.
-  - Refaire `make ... Fake-Offline.x` puis `./Scripts/setup-online.sh ...`.
-
-- Erreur `You are trying to use insecure benchmarking functionality` :
-  - ajouter `MY_CFLAGS += -DINSECURE` dans `CONFIG.mine`,
-  - puis `make clean` et recompiler.
-
-- Erreur `zsh: no matches found` sur un glob :
-  - utiliser `ls logs` puis `grep -R "SUM=" logs`.
-
-## Orchestration asynchrone externe (Phase 1)
-
-Pour avancer vers un modèle "MP-SPDZ compute-only", le dépôt contient
-un orchestrateur externe qui pilote un round complet et produit des
-artefacts de décision.
-
-Commande (WSL/Linux) :
+Le script `scripts/run_async_round_wsl.sh` construit les binaires puis appelle `async_orchestrator.py`. Il n’existe **pas** d’option `--backend` : le méta-fichier indique `semi2k` à titre informatif.
 
 ```bash
 ./scripts/run_async_round_wsl.sh \
@@ -259,33 +185,31 @@ Commande (WSL/Linux) :
   --k-acks 2 \
   --ack-nodes 3 \
   --ack-timeout-seconds 2 \
-  --backend semi2k \
   --computation-nodes 3
 ```
 
-Artefacts générés :
-- `artifacts/run_meta.json`
-- `artifacts/core_set.json`
-- `artifacts/justification.json`
-- `artifacts/acks/ack_p*_cn*.json`
-- `artifacts/cn_keys/cn_*.pub.hex` et `cn_*.sec.hex` (signatures ACK Ed25519)
+Artefacts typiques : `artifacts/run_meta.json`, `artifacts/core_set.json`, `artifacts/justification.json`, `artifacts/acks/`, `artifacts/cn_keys/`.
 
-Schémas JSON de référence :
-- `schemas/ack.schema.json`
-- `schemas/core_set.schema.json`
-- `schemas/justification.schema.json`
+Schémas : `schemas/*.schema.json`.
 
-Scénarios ACK négatifs (insufficient/replay/hash/stale) :
+## Tests d’intégration complets
 
 ```bash
-./scripts/full_system_validation_wsl.sh
+bash scripts/full_system_validation_wsl.sh
 ```
 
-Rapport agrégé généré :
-- `backend_test_summary.txt`
+Rapport : `backend_test_summary.txt`.  
+Les parties MPC du script exigent **`semi2k-party.x`** et Python fonctionnel ; sinon les tests semi2k peuvent échouer avec « no result line in output » alors que la cause réelle est souvent l’absence du binaire MP-SPDZ (voir logs dans `.tmp_full_test_runs/`).
+
+## Dépannage
+
+- **`semi2k-party.x not found`** : compiler MP-SPDZ (`make semi2k-party.x`) dans `third_party/MP-SPDZ`.
+- **Pas de ligne `MP-SPDZ result:`** : vérifier `logs/player_0.log`, la sortie du bridge (`MP-SPDZ compilation failed`, `Could not parse result`, etc.) et la présence de `SUM=` / `RESULT=`.
+- **Échec de `compile.py`** : dépendances Python MP-SPDZ, chemins, droits d’exécution.
+- **Consensus ne crée pas `core_set.txt`** : le nombre d’entrées valides est inférieur au seuil `min_inputs` — ajuster `min_inputs` ou fournir plus de providers.
+- Erreurs **MP-SPDZ amont** (modulus, `INSECURE`, etc.) : se reporter au [README MP-SPDZ](https://github.com/data61/MP-SPDZ) pour les tutoriels **Player-Online** / **Fake-Offline** si vous les utilisez en dehors de ce flux semi2k.
 
 ## Limites
 
-- Consensus centralisé simulé (pas de vrai consensus byzantin).
-- Communication simplifiée par fichiers.
-- Objectif pédagogique/prototype, pas production.
+- Consensus centralisé par fichiers (pas de consensus byzantin réaliste).
+- Prototype pédagogique, pas destiné à la production.
