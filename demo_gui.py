@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 import shlex
 import shutil
 import subprocess
@@ -54,15 +55,19 @@ FONT_TITLE = ("Segoe UI Semibold", 18)
 FONT_BIG = ("Segoe UI Semibold", 13)
 FONT_MONO = ("Consolas", 10)
 
+# Taille de référence du schéma pipeline sur le canvas (scaling = grandissement / réduction).
+_PIPELINE_LAYOUT_W = 760.0
+_PIPELINE_LAYOUT_H = 430.0
+
 
 class VisualDemoGUI(tk.Tk):
     def __init__(self) -> None:
         # Initialisation générale de la fenêtre.
         super().__init__()
         self.title("Async MPC Demo GUI — Visual Pipeline")
-        self.geometry("1480x930")
-        self.minsize(1280, 820)
+        self._apply_screen_fit_geometry()
         self.configure(bg=BG)
+        self.resizable(True, True)
 
         # Variables affichées dans les cartes d’état.
         self.var_result = tk.StringVar(value="Result: waiting")
@@ -87,6 +92,37 @@ class VisualDemoGUI(tk.Tk):
         self._set_stage("bridge", "idle")
         self._set_stage("mpspdz", "idle")
         self._check_build_available(initial=True)
+
+    def _apply_screen_fit_geometry(self) -> None:
+        """Ouvre la fenêtre en fonction de l’écran (pas de taille figée 1920×1080)."""
+        self.update_idletasks()
+        sw = max(1, int(self.winfo_screenwidth()))
+        sh = max(1, int(self.winfo_screenheight()))
+        margin_x, margin_y = 32, 80
+
+        usable_w = max(640, sw - margin_x)
+        usable_h = max(480, sh - margin_y)
+
+        w = int(usable_w * 0.92)
+        h = int(usable_h * 0.90)
+        w = max(720, min(w, usable_w))
+        h = max(520, min(h, usable_h))
+
+        if w > sw - 8:
+            w = sw - 8
+        if h > sh - 8:
+            h = sh - 8
+
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 12)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Minimum redimensionnable : jamais plus grand que la fenêtre d’ouverture ni que l’écran.
+        min_w = max(560, min(840, sw - margin_x))
+        min_h = max(400, min(640, sh - margin_y))
+        min_w = max(480, min(min_w, w))
+        min_h = max(360, min(min_h, h))
+        self.minsize(min_w, min_h)
 
     # ---------- UI ----------
     def _build_style(self) -> None:
@@ -160,9 +196,80 @@ class VisualDemoGUI(tk.Tk):
         return entry
 
     def _build_sidebar(self) -> None:
-        # Barre latérale : entrées utilisateur + boutons.
+        # Barre latérale scrollable : tout le contenu peut dépasser la hauteur de fenêtre
+        # (évite que les boutons « Actions » soient coupés sur petits écrans).
+        shell = tk.Frame(self.sidebar, bg=PANEL)
+        shell.pack(fill="both", expand=True)
+        shell.grid_rowconfigure(0, weight=1)
+        shell.grid_columnconfigure(0, weight=1)
+
+        self._sidebar_canvas = tk.Canvas(
+            shell,
+            bg=PANEL,
+            highlightthickness=0,
+            bd=0,
+        )
+        vsb = tk.Scrollbar(
+            shell,
+            orient="vertical",
+            command=self._sidebar_canvas.yview,
+            bg=CARD_ALT,
+            troughcolor=PANEL,
+            activebackground=LINE,
+            width=14,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self._sidebar_canvas.configure(yscrollcommand=vsb.set)
+        self._sidebar_body = tk.Frame(self._sidebar_canvas, bg=PANEL)
+        self._sidebar_body_id = self._sidebar_canvas.create_window(
+            (0, 0), window=self._sidebar_body, anchor="nw"
+        )
+
+        def _sync_sidebar_scroll(_event: object | None = None) -> str:
+            self._sidebar_canvas.configure(scrollregion=self._sidebar_canvas.bbox("all"))
+            return ""
+
+        def _stretch_sidebar_inner(event: tk.Event) -> str:
+            self._sidebar_canvas.itemconfigure(self._sidebar_body_id, width=event.width)
+            return ""
+
+        self._sidebar_body.bind("<Configure>", lambda e: _sync_sidebar_scroll())
+        self._sidebar_canvas.bind("<Configure>", _stretch_sidebar_inner)
+
+        self._sidebar_canvas.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        def _sidebar_contains(widget: tk.Misc | None) -> bool:
+            while widget is not None:
+                if widget in (self._sidebar_body, self._sidebar_canvas, vsb):
+                    return True
+                widget = widget.master  # type: ignore[assignment]
+
+            return False
+
+        def _on_sidebar_wheel(event: tk.Event) -> None:
+            if not _sidebar_contains(event.widget):
+                return
+            if getattr(event, "delta", 0):
+                self._sidebar_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _on_sidebar_linux_up(event: tk.Event) -> None:
+            if _sidebar_contains(event.widget):
+                self._sidebar_canvas.yview_scroll(-1, "units")
+
+        def _on_sidebar_linux_down(event: tk.Event) -> None:
+            if _sidebar_contains(event.widget):
+                self._sidebar_canvas.yview_scroll(1, "units")
+
+        self.bind_all("<MouseWheel>", _on_sidebar_wheel, add="+")
+        if sys.platform.startswith("linux"):
+            self.bind_all("<Button-4>", _on_sidebar_linux_up, add="+")
+            self.bind_all("<Button-5>", _on_sidebar_linux_down, add="+")
+
+        body = self._sidebar_body
         sec = self._section(
-            self.sidebar,
+            body,
             "Input controls",
             "Fill the values below, then run a single step or the whole demo. The visual diagram on the right will animate the flow.",
         )
@@ -172,7 +279,7 @@ class VisualDemoGUI(tk.Tk):
         self.entry_consensus_args = self._labeled_entry(sec, "Consensus args", "Example: 2 --clean-inputs. Here 2 means the minimum number of valid inputs required.", "2 --clean-inputs")
         self.entry_bridge_args = self._labeled_entry(sec, "Bridge args", "Main example: programs/sum.mpc. Do not put --backend here; the current bridge CLI no longer accepts it.", "programs/sum.mpc")
 
-        options = self._section(self.sidebar, "Runtime")
+        options = self._section(body, "Runtime")
         chk = tk.Checkbutton(
             options,
             text="Run commands in WSL",
@@ -197,7 +304,7 @@ class VisualDemoGUI(tk.Tk):
         ).pack(anchor="w")
 
         actions = self._section(
-            self.sidebar,
+            body,
             "Actions",
             "Single-step buttons help explain the pipeline. The full scenario launches provider 1 = 10, provider 2 = 3, consensus with quorum 2, then the bridge.",
         )
@@ -214,7 +321,7 @@ class VisualDemoGUI(tk.Tk):
         self._button(actions, "Run full scenario", self.run_full_scenario, accent=True).pack(fill="x", pady=(2, 4))
 
         # Petite légende pour comprendre les couleurs du schéma.
-        notes = self._section(self.sidebar, "How to read the picture")
+        notes = self._section(body, "How to read the picture")
         legend = tk.Frame(notes, bg=PANEL)
         legend.pack(fill="x")
         self._legend_item(legend, IDLE, "Idle")
@@ -265,7 +372,10 @@ class VisualDemoGUI(tk.Tk):
         tk.Label(panel, text="Visual pipeline", bg=PANEL, fg=TEXT, font=FONT_BIG).pack(anchor="w", padx=14, pady=(12, 0))
         tk.Label(panel, text="Nodes light up as the real commands execute. This makes the dataflow easier to explain in a demo.", bg=PANEL, fg=MUTED, font=FONT).pack(anchor="w", padx=14, pady=(2, 8))
 
-        self.canvas = tk.Canvas(panel, bg=CARD_ALT, highlightthickness=0, height=470)
+        # Hauteur initiale liée à l’écran ; le canvas grandit avec la grille (expand=True).
+        _sh = int(self.winfo_screenheight())
+        _canvas_h = max(280, min(560, int(_sh * 0.22)))
+        self.canvas = tk.Canvas(panel, bg=CARD_ALT, highlightthickness=0, height=_canvas_h)
         self.canvas.pack(fill="both", expand=True, padx=14, pady=(0, 14))
         self.canvas.bind("<Configure>", lambda _e: self._draw_pipeline())
 
@@ -314,14 +424,22 @@ class VisualDemoGUI(tk.Tk):
 
     # ---------- visual pipeline ----------
     def _draw_pipeline(self) -> None:
-        # Redessine tout le schéma du pipeline.
+        # Redessine tout le schéma du pipeline (mise à l’échelle selon la taille réelle du canvas).
         c = self.canvas
         c.delete("all")
-        w = max(c.winfo_width(), 760)
-        h = max(c.winfo_height(), 430)
+        raw_w = c.winfo_width()
+        raw_h = c.winfo_height()
+        if raw_w <= 1 or raw_h <= 1:
+            return
 
-        # Position fixe des blocs dans le schéma.
-        positions = {
+        scale = min(raw_w / _PIPELINE_LAYOUT_W, raw_h / _PIPELINE_LAYOUT_H)
+        off_x = (raw_w - _PIPELINE_LAYOUT_W * scale) / 2.0
+        off_y = (raw_h - _PIPELINE_LAYOUT_H * scale) / 2.0
+
+        def pt(x: float, y: float) -> tuple[float, float]:
+            return (off_x + x * scale, off_y + y * scale)
+
+        base_positions = {
             "provider1": (120, 110),
             "provider2": (120, 235),
             "provider3": (120, 360),
@@ -329,48 +447,95 @@ class VisualDemoGUI(tk.Tk):
             "bridge": (610, 170),
             "mpspdz": (610, 315),
         }
+        positions = {k: pt(xy[0], xy[1]) for k, xy in base_positions.items()}
 
         self.pipeline_lines.clear()
         self.pipeline_items.clear()
         self.pipeline_labels.clear()
 
         # Lignes de circulation des données.
-        self._draw_line("p1_cons", positions["provider1"], positions["consensus"], "validated input")
-        self._draw_line("p2_cons", positions["provider2"], positions["consensus"], "validated input")
-        self._draw_line("p3_cons", positions["provider3"], positions["consensus"], "optional / missing")
-        self._draw_line("cons_bridge", positions["consensus"], positions["bridge"], "core_set.txt")
-        self._draw_line("bridge_mps", positions["bridge"], positions["mpspdz"], "Player-Data + run")
+        self._draw_line("p1_cons", positions["provider1"], positions["consensus"], "validated input", scale)
+        self._draw_line("p2_cons", positions["provider2"], positions["consensus"], "validated input", scale)
+        self._draw_line("p3_cons", positions["provider3"], positions["consensus"], "optional / missing", scale)
+        self._draw_line("cons_bridge", positions["consensus"], positions["bridge"], "core_set.txt", scale)
+        self._draw_line("bridge_mps", positions["bridge"], positions["mpspdz"], "Player-Data + run", scale)
 
-        # Nœuds du pipeline.
-        self._draw_node("provider1", *positions["provider1"], 72, "Provider 1", "Private input\nmask + write file")
-        self._draw_node("provider2", *positions["provider2"], 72, "Provider 2", "Private input\nmask + write file")
-        self._draw_node("provider3", *positions["provider3"], 72, "Provider 3", "Optional / late\ncan be ignored")
-        self._draw_node("consensus", *positions["consensus"], 84, "Consensus", "Validate inputs\nselect core set")
-        self._draw_node("bridge", *positions["bridge"], 84, "Bridge", "Prepare MP-SPDZ\nPlayer-Data")
-        self._draw_node("mpspdz", *positions["mpspdz"], 84, "MP-SPDZ", "Secure compute\nreturn result")
+        # Nœuds du pipeline (rayons proportionnels).
+        self._draw_node("provider1", *positions["provider1"], 72 * scale, "Provider 1", "Private input\nmask + write file", scale)
+        self._draw_node("provider2", *positions["provider2"], 72 * scale, "Provider 2", "Private input\nmask + write file", scale)
+        self._draw_node("provider3", *positions["provider3"], 72 * scale, "Provider 3", "Optional / late\ncan be ignored", scale)
+        self._draw_node("consensus", *positions["consensus"], 84 * scale, "Consensus", "Validate inputs\nselect core set", scale)
+        self._draw_node("bridge", *positions["bridge"], 84 * scale, "Bridge", "Prepare MP-SPDZ\nPlayer-Data", scale)
+        self._draw_node("mpspdz", *positions["mpspdz"], 84 * scale, "MP-SPDZ", "Secure compute\nreturn result", scale)
 
-        # Encadre la zone de calcul sécurisé.
-        c.create_text(610, 55, text="Secure computation zone", fill=MUTED, font=("Segoe UI", 10, "italic"))
-        c.create_rectangle(500, 90, 720, 395, outline="#234156", dash=(6, 4))
+        tx, ty = pt(610, 55)
+        fz = max(7, min(11, int(round(10 * scale))))
+        c.create_text(tx, ty, text="Secure computation zone", fill=MUTED, font=("Segoe UI", fz, "italic"))
 
-    def _draw_line(self, key: str, p1: tuple[int, int], p2: tuple[int, int], text: str) -> None:
+        bx0, by0 = pt(500, 90)
+        bx1, by1 = pt(720, 395)
+        dash_pat = (max(3, int(round(6 * scale))), max(2, int(round(4 * scale))))
+        c.create_rectangle(bx0, by0, bx1, by1, outline="#234156", dash=dash_pat)
+
+    def _draw_line(
+        self,
+        key: str,
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+        text: str,
+        scale: float,
+    ) -> None:
         # Dessine une flèche entre deux composants.
         c = self.canvas
         x1, y1 = p1
         x2, y2 = p2
-        line = c.create_line(x1 + 76, y1, x2 - 90, y2, fill=LINE, width=3, arrow=tk.LAST, smooth=True)
-        tx = (x1 + x2) / 2 + 5
-        ty = (y1 + y2) / 2 - 18
-        lbl = c.create_text(tx, ty, text=text, fill=MUTED, font=("Segoe UI", 9))
+        inset = 76.0 * scale
+        outset = 90.0 * scale
+        lw = max(1.0, 3.0 * scale)
+        line = c.create_line(
+            x1 + inset,
+            y1,
+            x2 - outset,
+            y2,
+            fill=LINE,
+            width=lw,
+            arrow=tk.LAST,
+            smooth=True,
+        )
+        tx = (x1 + x2) / 2 + 5.0 * scale
+        ty = (y1 + y2) / 2 - 18.0 * scale
+        fs = max(7, min(10, int(round(9 * scale))))
+        lbl = c.create_text(tx, ty, text=text, fill=MUTED, font=("Segoe UI", fs))
         self.pipeline_lines[key] = line
         self.pipeline_labels[key] = lbl
 
-    def _draw_node(self, key: str, x: int, y: int, r: int, title: str, subtitle: str) -> None:
+    def _draw_node(
+        self,
+        key: str,
+        x: float,
+        y: float,
+        r: float,
+        title: str,
+        subtitle: str,
+        scale: float,
+    ) -> None:
         # Dessine un nœud du schéma avec son titre.
         c = self.canvas
-        oval = c.create_oval(x - r, y - r + 10, x + r, y + r - 10, fill=IDLE, outline="#5b6b80", width=2)
-        c.create_text(x, y - 12, text=title, fill=TEXT, font=FONT_BOLD)
-        c.create_text(x, y + 20, text=subtitle, fill="#d1d5db", font=("Segoe UI", 9), justify="center")
+        squash = 10.0 * scale
+        ow = max(1, int(round(2 * scale)))
+        oval = c.create_oval(
+            x - r,
+            y - r + squash,
+            x + r,
+            y + r - squash,
+            fill=IDLE,
+            outline="#5b6b80",
+            width=ow,
+        )
+        title_fs = max(8, min(11, int(round(10 * scale))))
+        sub_fs = max(7, min(9, int(round(9 * scale))))
+        c.create_text(x, y - 12.0 * scale, text=title, fill=TEXT, font=("Segoe UI Semibold", title_fs))
+        c.create_text(x, y + 20.0 * scale, text=subtitle, fill="#d1d5db", font=("Segoe UI", sub_fs), justify="center")
         self.pipeline_items[key] = oval
 
     def _set_stage(self, stage: str, state: str) -> None:
