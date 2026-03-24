@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Interactive demo GUI for the async-orchestrated MP-SPDZ pipeline.
+Interface graphique de démonstration pour le pipeline MP-SPDZ orchestré de façon asynchrone.
 
-Design goals:
-- Keep the original GUI intuitive with clear field descriptions.
-- Add a visual pipeline so users understand providers -> consensus -> bridge -> MP-SPDZ.
-- Run binaries from the repository root for path stability.
+But de cette interface :
+- lancer facilement les vraies étapes du projet ;
+- montrer visuellement le chemin providers → consensus → bridge → MP-SPDZ ;
+- afficher les logs réels pour suivre ce qui s’exécute.
 
-Expected layout:
+Structure attendue :
 repo/
   demo_gui_visual.py
   build/node/data_provider
@@ -28,10 +28,12 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+# Chemins principaux du projet.
 REPO_ROOT = Path(__file__).resolve().parent
 BUILD_DIR = REPO_ROOT / "build"
 IS_WINDOWS = platform.system().lower().startswith("win")
 
+# Couleurs de l’interface.
 BG = "#0f172a"
 PANEL = "#111827"
 CARD = "#1f2937"
@@ -45,6 +47,7 @@ ERROR = "#ef4444"
 IDLE = "#334155"
 LINE = "#475569"
 
+# Polices utilisées dans la GUI.
 FONT = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI Semibold", 10)
 FONT_TITLE = ("Segoe UI Semibold", 18)
@@ -54,22 +57,26 @@ FONT_MONO = ("Consolas", 10)
 
 class VisualDemoGUI(tk.Tk):
     def __init__(self) -> None:
+        # Initialisation générale de la fenêtre.
         super().__init__()
         self.title("Async MPC Demo GUI — Visual Pipeline")
         self.geometry("1480x930")
         self.minsize(1280, 820)
         self.configure(bg=BG)
 
+        # Variables affichées dans les cartes d’état.
         self.var_result = tk.StringVar(value="Result: waiting")
         self.var_core = tk.StringVar(value="Core set: waiting")
         self.var_status = tk.StringVar(value="Status: idle")
         self.var_wsl = tk.BooleanVar(value=False)
 
+        # Ces dictionnaires servent à garder les éléments dessinés dans le schéma.
         self.pipeline_items: dict[str, int] = {}
         self.pipeline_labels: dict[str, int] = {}
         self.pipeline_lines: dict[str, int] = {}
         self.provider_visual_slots = [1, 2, 3]
 
+        # Construction de l’interface et état initial.
         self._build_style()
         self._build_ui()
         self._draw_pipeline()
@@ -83,6 +90,7 @@ class VisualDemoGUI(tk.Tk):
 
     # ---------- UI ----------
     def _build_style(self) -> None:
+        # Configure un style sombre simple pour les widgets ttk.
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
@@ -92,6 +100,7 @@ class VisualDemoGUI(tk.Tk):
         style.configure("TCheckbutton", background=PANEL, foreground=TEXT)
 
     def _build_ui(self) -> None:
+        # Construit les grandes zones de la fenêtre.
         root = tk.Frame(self, bg=BG)
         root.pack(fill="both", expand=True, padx=16, pady=16)
         root.grid_columnconfigure(0, weight=0)
@@ -131,6 +140,7 @@ class VisualDemoGUI(tk.Tk):
         self._build_log_panel()
 
     def _section(self, parent: tk.Widget, title: str, subtitle: str | None = None) -> tk.Frame:
+        # Crée une petite section avec titre et sous-titre.
         wrap = tk.Frame(parent, bg=PANEL)
         wrap.pack(fill="x", padx=14, pady=(12, 0))
         tk.Label(wrap, text=title, font=FONT_BIG, bg=PANEL, fg=TEXT).pack(anchor="w")
@@ -139,6 +149,7 @@ class VisualDemoGUI(tk.Tk):
         return wrap
 
     def _labeled_entry(self, parent: tk.Widget, label: str, help_text: str, default: str, width: int = 28) -> tk.Entry:
+        # Crée un champ texte avec un label et une aide courte.
         frame = tk.Frame(parent, bg=PANEL)
         frame.pack(fill="x", pady=(0, 10))
         tk.Label(frame, text=label, font=FONT_BOLD, bg=PANEL, fg=TEXT).pack(anchor="w")
@@ -149,6 +160,7 @@ class VisualDemoGUI(tk.Tk):
         return entry
 
     def _build_sidebar(self) -> None:
+        # Barre latérale : entrées utilisateur + boutons.
         sec = self._section(
             self.sidebar,
             "Input controls",
@@ -201,6 +213,7 @@ class VisualDemoGUI(tk.Tk):
 
         self._button(actions, "Run full scenario", self.run_full_scenario, accent=True).pack(fill="x", pady=(2, 4))
 
+        # Petite légende pour comprendre les couleurs du schéma.
         notes = self._section(self.sidebar, "How to read the picture")
         legend = tk.Frame(notes, bg=PANEL)
         legend.pack(fill="x")
@@ -219,6 +232,7 @@ class VisualDemoGUI(tk.Tk):
         ).pack(anchor="w", pady=(8, 0))
 
     def _legend_item(self, parent: tk.Widget, color: str, text: str) -> None:
+        # Affiche un rond coloré avec son label.
         row = tk.Frame(parent, bg=PANEL)
         row.pack(anchor="w", pady=2)
         tk.Canvas(row, width=14, height=14, bg=PANEL, highlightthickness=0).pack(side="left")
@@ -227,6 +241,7 @@ class VisualDemoGUI(tk.Tk):
         tk.Label(row, text=text, bg=PANEL, fg=TEXT, font=("Segoe UI", 9)).pack(side="left", padx=(6, 0))
 
     def _button(self, parent: tk.Widget, text: str, command, accent: bool) -> tk.Button:
+        # Crée un bouton avec le style visuel du projet.
         return tk.Button(
             parent,
             text=text,
@@ -244,6 +259,7 @@ class VisualDemoGUI(tk.Tk):
         )
 
     def _build_visual_panel(self) -> None:
+        # Zone centrale qui affiche le pipeline visuel.
         panel = tk.Frame(self.main_top, bg=PANEL, highlightthickness=1, highlightbackground="#263244")
         panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         tk.Label(panel, text="Visual pipeline", bg=PANEL, fg=TEXT, font=FONT_BIG).pack(anchor="w", padx=14, pady=(12, 0))
@@ -254,6 +270,7 @@ class VisualDemoGUI(tk.Tk):
         self.canvas.bind("<Configure>", lambda _e: self._draw_pipeline())
 
     def _build_status_cards(self) -> None:
+        # Cartes à droite pour afficher les infos importantes.
         side = tk.Frame(self.main_top, bg=BG)
         side.grid(row=0, column=1, sticky="nsew")
         side.grid_rowconfigure(3, weight=1)
@@ -275,12 +292,14 @@ class VisualDemoGUI(tk.Tk):
         tk.Label(help_card, text=bullets, bg=PANEL, fg=MUTED, font=FONT, justify="left", wraplength=390).pack(anchor="w", padx=14, pady=(8, 14))
 
     def _info_card(self, parent: tk.Widget, title: str, var: tk.StringVar, row: int) -> None:
+        # Carte simple : titre + valeur dynamique.
         card = tk.Frame(parent, bg=PANEL, highlightthickness=1, highlightbackground="#263244")
         card.grid(row=row, column=0, sticky="ew", pady=(0, 12))
         tk.Label(card, text=title, bg=PANEL, fg=MUTED, font=FONT).pack(anchor="w", padx=14, pady=(10, 0))
         tk.Label(card, textvariable=var, bg=PANEL, fg=TEXT, font=FONT_BIG, wraplength=390, justify="left").pack(anchor="w", padx=14, pady=(4, 12))
 
     def _build_log_panel(self) -> None:
+        # Zone de logs pour voir stdout/stderr des commandes lancées.
         panel = tk.Frame(self.main_bottom, bg=PANEL, highlightthickness=1, highlightbackground="#263244")
         panel.grid(row=0, column=0, sticky="nsew")
         tk.Label(panel, text="Execution log", bg=PANEL, fg=TEXT, font=FONT_BIG).pack(anchor="w", padx=14, pady=(12, 0))
@@ -295,11 +314,13 @@ class VisualDemoGUI(tk.Tk):
 
     # ---------- visual pipeline ----------
     def _draw_pipeline(self) -> None:
+        # Redessine tout le schéma du pipeline.
         c = self.canvas
         c.delete("all")
         w = max(c.winfo_width(), 760)
         h = max(c.winfo_height(), 430)
 
+        # Position fixe des blocs dans le schéma.
         positions = {
             "provider1": (120, 110),
             "provider2": (120, 235),
@@ -313,12 +334,14 @@ class VisualDemoGUI(tk.Tk):
         self.pipeline_items.clear()
         self.pipeline_labels.clear()
 
+        # Lignes de circulation des données.
         self._draw_line("p1_cons", positions["provider1"], positions["consensus"], "validated input")
         self._draw_line("p2_cons", positions["provider2"], positions["consensus"], "validated input")
         self._draw_line("p3_cons", positions["provider3"], positions["consensus"], "optional / missing")
         self._draw_line("cons_bridge", positions["consensus"], positions["bridge"], "core_set.txt")
         self._draw_line("bridge_mps", positions["bridge"], positions["mpspdz"], "Player-Data + run")
 
+        # Nœuds du pipeline.
         self._draw_node("provider1", *positions["provider1"], 72, "Provider 1", "Private input\nmask + write file")
         self._draw_node("provider2", *positions["provider2"], 72, "Provider 2", "Private input\nmask + write file")
         self._draw_node("provider3", *positions["provider3"], 72, "Provider 3", "Optional / late\ncan be ignored")
@@ -326,10 +349,12 @@ class VisualDemoGUI(tk.Tk):
         self._draw_node("bridge", *positions["bridge"], 84, "Bridge", "Prepare MP-SPDZ\nPlayer-Data")
         self._draw_node("mpspdz", *positions["mpspdz"], 84, "MP-SPDZ", "Secure compute\nreturn result")
 
+        # Encadre la zone de calcul sécurisé.
         c.create_text(610, 55, text="Secure computation zone", fill=MUTED, font=("Segoe UI", 10, "italic"))
         c.create_rectangle(500, 90, 720, 395, outline="#234156", dash=(6, 4))
 
     def _draw_line(self, key: str, p1: tuple[int, int], p2: tuple[int, int], text: str) -> None:
+        # Dessine une flèche entre deux composants.
         c = self.canvas
         x1, y1 = p1
         x2, y2 = p2
@@ -341,6 +366,7 @@ class VisualDemoGUI(tk.Tk):
         self.pipeline_labels[key] = lbl
 
     def _draw_node(self, key: str, x: int, y: int, r: int, title: str, subtitle: str) -> None:
+        # Dessine un nœud du schéma avec son titre.
         c = self.canvas
         oval = c.create_oval(x - r, y - r + 10, x + r, y + r - 10, fill=IDLE, outline="#5b6b80", width=2)
         c.create_text(x, y - 12, text=title, fill=TEXT, font=FONT_BOLD)
@@ -348,6 +374,7 @@ class VisualDemoGUI(tk.Tk):
         self.pipeline_items[key] = oval
 
     def _set_stage(self, stage: str, state: str) -> None:
+        # Change la couleur d’un bloc selon son état.
         if stage not in self.pipeline_items:
             return
         fill = {"idle": IDLE, "running": WARN, "success": SUCCESS, "error": ERROR}.get(state, IDLE)
@@ -357,15 +384,18 @@ class VisualDemoGUI(tk.Tk):
 
     # ---------- helpers ----------
     def append(self, text: str, tag: str | None = None) -> None:
+        # Ajoute du texte dans le log et scroll automatiquement.
         self.log.insert("end", text, tag or "")
         self.log.see("end")
         self.update_idletasks()
 
     def set_status(self, text: str) -> None:
+        # Met à jour le statut général.
         self.var_status.set(f"Status: {text}")
         self.update_idletasks()
 
     def get_computation_nodes(self) -> int:
+        # Récupère N et vérifie que c’est un entier positif.
         try:
             n = int(self.entry_computation_nodes.get().strip())
             if n <= 0:
@@ -375,6 +405,7 @@ class VisualDemoGUI(tk.Tk):
             raise ValueError("Computation nodes (N) must be a positive integer.")
 
     def to_wsl_path(self, path: Path) -> str:
+        # Convertit un chemin Windows vers le format WSL.
         path = path.resolve()
         s = str(path).replace("\\", "/")
         if len(s) > 1 and s[1] == ":":
@@ -383,6 +414,7 @@ class VisualDemoGUI(tk.Tk):
         return s
 
     def _binary_candidates(self) -> list[Path]:
+        # Liste des binaires que la GUI doit trouver.
         suffix = ".exe" if IS_WINDOWS and not self.var_wsl.get() else ""
         return [
             BUILD_DIR / "node" / f"data_provider{suffix}",
@@ -391,6 +423,7 @@ class VisualDemoGUI(tk.Tk):
         ]
 
     def _check_build_available(self, initial: bool = False) -> bool:
+        # Vérifie que les exécutables compilés existent bien.
         missing = [str(p) for p in self._binary_candidates() if not p.exists()]
         if not missing:
             return True
@@ -401,6 +434,7 @@ class VisualDemoGUI(tk.Tk):
         return False
 
     def _native_run(self, args: list[str]) -> tuple[int, str]:
+        # Lance une commande localement depuis la racine du dépôt.
         self.append(f"$ (cwd={REPO_ROOT}) {' '.join(args)}\n", "cmd")
         proc = subprocess.run(
             args,
@@ -414,6 +448,7 @@ class VisualDemoGUI(tk.Tk):
         return proc.returncode, output
 
     def _wsl_run(self, args: list[str]) -> tuple[int, str]:
+        # Lance une commande dans WSL.
         repo_wsl = shlex.quote(self.to_wsl_path(REPO_ROOT))
         cmd = "cd " + repo_wsl + " && " + " ".join(shlex.quote(a) for a in args)
         shown = f"$ (cwd={REPO_ROOT}) {' '.join(args)}\n"
@@ -429,6 +464,7 @@ class VisualDemoGUI(tk.Tk):
         return proc.returncode, output
 
     def run_logged(self, args: list[str], kind: str, stage: str | None = None) -> tuple[int, str]:
+        # Lance une commande, met à jour le schéma, puis écrit le résultat dans le log.
         if stage:
             self._set_stage(stage, "running")
         runner = self._wsl_run if self.var_wsl.get() else self._native_run
@@ -441,6 +477,7 @@ class VisualDemoGUI(tk.Tk):
         return rc, output
 
     def _parse_summary(self, text: str) -> None:
+        # Cherche dans les logs le core set et le résultat final.
         for line in text.splitlines():
             if "Core set decided" in line:
                 self.var_core.set(f"Core set: {line.strip()}")
@@ -452,10 +489,12 @@ class VisualDemoGUI(tk.Tk):
                 self.var_result.set(f"Result: {line.split('Fallback plaintext sum =', 1)[1].strip()} (fallback)")
 
     def run_in_thread(self, fn) -> None:
+        # Lance une tâche dans un thread pour ne pas bloquer l’interface.
         threading.Thread(target=fn, daemon=True).start()
 
     # ---------- actions ----------
     def run_provider(self) -> None:
+        # Lance un provider avec les valeurs saisies.
         if not self._check_build_available():
             return
         def task():
@@ -474,6 +513,7 @@ class VisualDemoGUI(tk.Tk):
         self.run_in_thread(task)
 
     def run_consensus(self) -> None:
+        # Lance le consensus avec les arguments saisis.
         if not self._check_build_available():
             return
         def task():
@@ -484,6 +524,7 @@ class VisualDemoGUI(tk.Tk):
         self.run_in_thread(task)
 
     def run_bridge(self) -> None:
+        # Lance le bridge puis reflète l’activité MP-SPDZ dans le schéma.
         if not self._check_build_available():
             return
         def task():
@@ -503,6 +544,7 @@ class VisualDemoGUI(tk.Tk):
         self.run_in_thread(task)
 
     def reset_workspace(self) -> None:
+        # Supprime les fichiers générés pour repartir d’un état propre.
         def task():
             self.set_status("resetting workspace")
             self.var_result.set("Result: waiting")
@@ -539,6 +581,7 @@ class VisualDemoGUI(tk.Tk):
         self.run_in_thread(task)
 
     def run_full_scenario(self) -> None:
+        # Joue une démo complète : 2 providers, consensus, puis bridge.
         if not self._check_build_available():
             return
         def task():
@@ -554,6 +597,7 @@ class VisualDemoGUI(tk.Tk):
             for stage in ["provider1", "provider2", "provider3", "consensus", "bridge", "mpspdz"]:
                 self._set_stage(stage, "idle")
 
+            # Scénario prédéfini pour la démo.
             steps = [
                 (["build/node/data_provider", "1", "10", "--computation-nodes", str(n)], "provider", "provider1"),
                 (["build/node/data_provider", "2", "3", "--computation-nodes", str(n)], "provider", "provider2"),
@@ -579,6 +623,7 @@ class VisualDemoGUI(tk.Tk):
 
 
 def main() -> None:
+    # Point d’entrée de l’application.
     app = VisualDemoGUI()
     app.mainloop()
 
