@@ -13,10 +13,9 @@ Target split:
 
 - Done: `inputs` count is decoupled from `computation_nodes`.
 - Done: input selection (core set) is outside MP-SPDZ.
-- Missing:
-  - explicit CN-signed ACK evidence (`k-of-n`, timeout, anti-replay),
-  - auditable decision artifacts (`core_set.json`, `justification.json`),
-  - a single orchestration state machine controlling the full session lifecycle.
+- Done: explicit CN-signed ACK evidence (signatures vérifiées, `--timeout-seconds` et anti-replay, couverture complète des `party_index` requis en ACK mode).
+- Done: artefacts de décision auditable (`artifacts/core_set.json`, `artifacts/justification.json` en mode ACK).
+- Remaining: une unique state machine d'orchestration contrôlant le cycle de session complet (aujourd'hui géré via scripts/rounds).
 
 ## Execution Plan
 

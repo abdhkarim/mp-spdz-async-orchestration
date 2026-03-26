@@ -17,7 +17,6 @@
  *   ./spdz_bridge [--computation-nodes N] [program_path]
  */
 
-#include <boost/multiprecision/cpp_int.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -34,7 +33,6 @@
 #include "semi2k_prep.hpp"
 
 namespace fs = std::filesystem;
-using boost::multiprecision::cpp_int;
 
 // =============================================================================
 // Types
@@ -339,37 +337,32 @@ int main(int argc, char** argv) {
     std::vector<Semi2kPrep::ProviderEntry> prep_entries;
     prep_entries.reserve(selected.size());
     for (const auto& p : selected) {
-        Semi2kPrep::ProviderEntry e;
-        e.id = p.id;
-        if (!p.masked_value_str.empty()) {
-            // Provider used masking: verify share files exist before proceeding.
-            const auto sh0 = Semi2kPrep::load_provider_share(root, p.id, 0);
-            if (sh0) {
-                e.masked_value = p.masked_value_str;  // (x_i - s_i)
-                e.plain_value  = "";
-            } else {
-                // No share files — provider fell back to plain value.
-                e.masked_value = "";
-                e.plain_value  = p.masked_value_str;
-            }
-        } else {
-            e.masked_value = "";
-            e.plain_value  = p.masked_value_str;
+        if (p.masked_value_str.empty()) {
+            std::cerr << "Provider " << p.id
+                      << " has empty masked_value (masked wire required)\n";
+            return 1;
         }
+        const auto sh0 = Semi2kPrep::load_provider_share(root, p.id, 0);
+        if (!sh0) {
+            std::cerr << "Missing share files for provider " << p.id
+                      << " (expected provider_secrets/provider_" << p.id
+                      << "_share_<p>.secret for each party)\n";
+            return 1;
+        }
+        Semi2kPrep::ProviderEntry e;
+        e.id           = p.id;
+        e.masked_value = p.masked_value_str;
         prep_entries.push_back(std::move(e));
     }
 
-    std::string fallback_sum_str;
-    if (!Semi2kPrep::prepare_player_data(
-            mp_spdz_root, prep_entries, root, n_parties, fallback_sum_str))
+    if (!Semi2kPrep::prepare_player_data(mp_spdz_root, prep_entries, root, n_parties))
         return 1;
 
     // ── Verify semi2k binary ──────────────────────────────────────────────────
     const fs::path semi2k_binary = mp_spdz_root / "semi2k-party.x";
     if (!fs::exists(semi2k_binary)) {
-        std::cout << "semi2k-party.x not found at " << semi2k_binary << "\n"
-                  << "Fallback plaintext sum = " << fallback_sum_str << "\n";
-        return 0;
+        std::cerr << "semi2k-party.x not found at " << semi2k_binary << "\n";
+        return 1;
     }
 
     // ── Compile .mpc program ──────────────────────────────────────────────────
@@ -381,8 +374,8 @@ int main(int argc, char** argv) {
 
     if (!compile_program(mp_spdz_root, cfg.program_path, n_parties,
                          static_cast<int>(selected.size()))) {
-        std::cout << "MP-SPDZ compilation failed. Fallback sum = " << fallback_sum_str << "\n";
-        return 0;
+        std::cerr << "MP-SPDZ compilation failed.\n";
+        return 1;
     }
 
     // ── Run semi2k online computation ─────────────────────────────────────────
@@ -396,13 +389,14 @@ int main(int argc, char** argv) {
     if (result) {
         std::cout << "MP-SPDZ result: " << *result << "\n";
     } else {
-        std::cout << "Could not parse result from MP-SPDZ log. "
-                  << "Fallback sum = " << fallback_sum_str << "\n";
+        std::cerr << "Could not parse RESULT= or SUM= from MP-SPDZ log (logs/player_0.log)\n";
     }
 
     if (!run_ok) {
-        std::cout << "Some semi2k parties failed; "
-                  << "fallback sum = " << fallback_sum_str << "\n";
+        std::cerr << "Some semi2k parties failed (see logs/player_*.log)\n";
+        return 1;
+    }
+    if (!result) {
         return 1;
     }
 

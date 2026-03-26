@@ -1,20 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.local/schemas/ack.schema.json",
-  "title": "Computation Node ACK",
+  "title": "Computation Node Share ACK",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "session_id",
+    "protocol_version",
     "round_id",
+    "schema_id",
     "provider_id",
-    "computation_node_id",
-    "input_hash",
+    "nonce",
+    "party_index",
+    "share_manifest_id",
+    "mask_commitment_leaves_digest",
+    "share_file_digest",
+    "share_commitment",
+    "share_commitment_r",
     "timestamp_unix_ms",
     "signature"
   ],
   "properties": {
     "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocol_version": {
       "type": "string",
       "minLength": 1
     },
@@ -26,11 +37,35 @@
       "type": "integer",
       "minimum": 1
     },
-    "computation_node_id": {
+    "schema_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{32}$"
+    },
+    "party_index": {
       "type": "integer",
       "minimum": 0
     },
-    "input_hash": {
+    "share_manifest_id": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "mask_commitment_leaves_digest": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "share_file_digest": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "share_commitment": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "share_commitment_r": {
       "type": "string",
       "pattern": "^[a-fA-F0-9]{64}$"
     },

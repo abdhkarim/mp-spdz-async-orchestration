@@ -12,9 +12,26 @@ Déterminer un ensemble de participants fiables (*core set*) tels que :
 - les données nécessaires au calcul ont été correctement reçues,
 - le calcul MPC peut être lancé sans blocage.
 
+## Protocole implémenté (état actuel)
+
+Ce flux correspond au code présent dans ce dépôt :
+
+1. `node/data_provider` (provider) écrit des évidences et des secrets :
+   - `inputs/provider_<id>.txt`,
+   - `inputs/provider_<id>_manifest.json`,
+   - `inputs/provider_<id>_type_proof.json`,
+   - `provider_secrets/provider_<id>_share_<p>.secret`.
+2. `consensus/share_verifier` (un par `party_index`) vérifie sa share locale et émet un ACK signé.
+3. `consensus/consensus` (admission) vérifie :
+   - preuve provider (BLAKE2b keyed) + wire canonique,
+   - `type_proof` (vérification directe dans `consensus`, sans famille `type_ack`),
+   - ACKs en mode `--acks-dir` + anti-replay + couverture complète des `party_index` requis.
+   Il écrit `core_set.txt`.
+4. `spdz_bridge` exécute seulement : il lit `core_set.txt`, prépare `Player-Data` et lance `semi2k-party.x` (pas de rôle d'admission, et pas de fallback plaintext/sum).
+
 ---
 
-## Phase 1 : collecte asynchrone
+## Schéma générique (historique) : collecte asynchrone
 
 Chaque participant :
 1. envoie ses données aux autres participants,
@@ -45,7 +62,7 @@ Propriétés assurées :
 
 ---
 
-## Phase 2 : décision du core set
+## Schéma générique (historique) : décision du core set
 
 Le service de consensus :
 1. collecte les preuves,
@@ -60,7 +77,7 @@ Cette règle est paramétrable.
 
 ---
 
-## Phase 3 : diffusion
+## Schéma générique (historique) : diffusion
 
 Une fois le core set décidé :
 - il est diffusé à tous les nœuds,
@@ -68,7 +85,7 @@ Une fois le core set décidé :
 
 ---
 
-## Phase 4 : calcul MPC
+## Schéma générique (historique) : calcul MPC
 
 Les participants du core set lancent MP-SPDZ
 avec une configuration cohérente.

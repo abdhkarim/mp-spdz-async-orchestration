@@ -39,16 +39,6 @@ static std::optional<long long> parse_integer(const std::string& s) {
     } catch (...) { return std::nullopt; }
 }
 
-static std::optional<cpp_int> parse_cpp_int(const std::string& s) {
-    if (s.empty()) return std::nullopt;
-    size_t start = 0;
-    if (s[0] == '+' || s[0] == '-') start = 1;
-    if (start >= s.size()) return std::nullopt;
-    for (size_t i = start; i < s.size(); ++i)
-        if (!std::isdigit(static_cast<unsigned char>(s[i]))) return std::nullopt;
-    try { return cpp_int(s); } catch (...) { return std::nullopt; }
-}
-
 // ---------------------------------------------------------------------------
 // 1. additive_shares_z2k64
 // ---------------------------------------------------------------------------
@@ -157,8 +147,7 @@ bool prepare_player_data(
     const fs::path&                   mp_spdz_root,
     const std::vector<ProviderEntry>& selected,
     const fs::path&                   secrets_root,
-    int                               n_parties,
-    std::string&                      fallback_sum_out)
+    int                               n_parties)
 {
     if (n_parties < 2) {
         std::cerr << "[semi2k_prep] At least 2 computation nodes required\n";
@@ -199,45 +188,28 @@ bool prepare_player_data(
         static_cast<size_t>(n_parties),
         std::vector<uint64_t>(selected.size(), 0));
 
-    cpp_int fallback_acc = 0;
-
     for (size_t pi = 0; pi < selected.size(); ++pi) {
         const ProviderEntry& prov = selected[pi];
 
-        // Resolve the public masked value (x_i - s_i).
-        const std::string mv = prov.masked_value.empty()
-                               ? prov.plain_value
-                               : prov.masked_value;
-        masked_values.push_back(mv);
-
-        // For the fallback sum: when we have a plain value we can use it directly.
-        // When the provider used masking, we cannot compute x_i without all shares,
-        // so we skip it (fallback is only a best-effort plaintext sum).
-        if (!prov.plain_value.empty()) {
-            const auto pv = parse_cpp_int(prov.plain_value);
-            if (pv) fallback_acc += *pv;
+        if (prov.masked_value.empty()) {
+            std::cerr << "[semi2k_prep] Provider " << prov.id
+                      << " has empty masked_value (masked wire required)\n";
+            return false;
         }
+        masked_values.push_back(prov.masked_value);
 
         // Read share_p for each party — bridge reads ONE share file per party,
         // never the full s_i.
         for (int p = 0; p < n_parties; ++p) {
-            if (!prov.masked_value.empty()) {
-                // Provider used masking: read share file.
-                const auto sh = load_provider_share(secrets_root, prov.id, p);
-                if (!sh) {
-                    std::cerr << "[semi2k_prep] Missing share file for provider "
-                              << prov.id << " party " << p << "\n";
-                    return false;
-                }
-                party_shares[static_cast<size_t>(p)][pi] = *sh;
-            } else {
-                // Provider fell back to plain value: s_i = 0, all shares = 0.
-                party_shares[static_cast<size_t>(p)][pi] = 0;
+            const auto sh = load_provider_share(secrets_root, prov.id, p);
+            if (!sh) {
+                std::cerr << "[semi2k_prep] Missing share file for provider "
+                          << prov.id << " party " << p << "\n";
+                return false;
             }
+            party_shares[static_cast<size_t>(p)][pi] = *sh;
         }
     }
-
-    fallback_sum_out = fallback_acc.convert_to<std::string>();
 
     // ------------------------------------------------------------------
     // Write Player-Data/Public-Masked-Values
@@ -278,7 +250,6 @@ bool prepare_player_data(
 
     std::cout << "[semi2k_prep] Player-Data prepared for " << n_parties
               << " parties, " << selected.size() << " provider(s)\n";
-    std::cout << "[semi2k_prep] Fallback plaintext sum = " << fallback_sum_out << "\n";
     return true;
 }
 

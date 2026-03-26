@@ -7,34 +7,32 @@ composant.
 
 ## Vue d’ensemble
 
-Le système est composé de trois blocs principaux :
+Le système est composé de quatre blocs principaux :
 
-1. **Nœuds MPC**
-2. **Organe de consensus externe**
-3. **Moteur MPC (MP-SPDZ)**
+1. **Provider (non fiable)**
+2. **Share verifiers (un par `party_index`)**
+3. **Consensus d’admission (autorité de core set)**
+4. **Exécution MPC (bridge + MP-SPDZ)**
 
-Le consensus est volontairement **externalisé** afin de ne pas modifier
+Le consensus d’admission est volontairement **externalisé** afin de ne pas modifier
 l’implémentation interne de MP-SPDZ.
 
 ---
 
-## 1. Nœuds MPC (`node/`)
+## 1. Provider et share verifiers (`node/`, `consensus/`)
 
-Chaque nœud représente un participant potentiel au calcul MPC.
+Cette phase produit l'evidence nécessaire à l'admission.
 
-Responsabilités :
-- participation à la phase asynchrone de collecte,
-- réception des données des autres participants,
-- génération de preuves de réception,
-- communication avec le service de consensus,
-- lancement ou participation à l’exécution MP-SPDZ si inclus dans le core set.
+Provider (`node/src/data_provider.cpp`) :
+- produit `inputs/provider_<id>.txt` (masked wire + preuve d'auth BLAKE2b keyed),
+- produit `inputs/provider_<id>_manifest.json` (engagements/digests publics pour vérification locale),
+- produit `inputs/provider_<id>_type_proof.json` (evidence de type, vérifiée dans le consensus),
+- génère `provider_secrets/provider_<id>_share_<p>.secret` pour chaque `party_index p` (le secret complet `s_i` n'est jamais écrit en clair).
 
-Les nœuds peuvent :
-- être lents,
-- se déconnecter,
-- crasher.
-
-Le système doit continuer à fonctionner malgré ces pannes.
+Share verifier (`consensus/src/share_verifier.cpp`) :
+- vérifie uniquement sa share locale `provider_<id>_share_<party_index>.secret`,
+- vérifie la cohérence avec le manifest public pour cet `party_index`,
+- produit un ACK signé pour l'admission.
 
 ---
 
@@ -43,17 +41,18 @@ Le système doit continuer à fonctionner malgré ces pannes.
 Le consensus est simulé par un service centralisé.
 
 Responsabilités :
-- collecte des preuves cryptographiques,
-- vérification de leur authenticité et validité,
-- application d’une règle de décision pour déterminer le core set,
-- diffusion de la décision aux nœuds MPC.
+- vérification des preuves provider (preuve BLAKE2b keyed, wire canonique),
+- vérification directe du `type_proof` via la factory de backends (`consensus/src/type_proof.cpp`),
+- en mode ACK : vérification des signatures et des champs de liaison des ACKs produits par les share verifiers,
+- imposition d’une couverture complète des `party_index` requis avant d’admettre un provider,
+- écriture du `core_set.txt` (décision d'admission).
 
 Ce composant ne réalise **pas** un consensus byzantin complet.
 Il s’agit d’un modèle simplifié et réaliste pour un prototype.
 
 ---
 
-## 3. MP-SPDZ (`third_party/mp-spdz`)
+## 3. MP-SPDZ (`third_party/MP-SPDZ`)
 
 MP-SPDZ est utilisé comme **boîte noire** pour le calcul MPC.
 
@@ -71,9 +70,13 @@ après la décision du core set.
 
 Ce module assure la liaison entre la phase asynchrone et MP-SPDZ :
 
+- lecture du `core_set.txt`,
+- préparation des entrées MP-SPDZ à partir des evidence déjà admises (masked values + shares locales),
 - génération des fichiers de configuration MP-SPDZ,
 - compilation des programmes `.mpc`,
 - lancement des processus MP-SPDZ avec les bons identifiants.
+
+Le bridge est volontairement **execution-only** : il ne revalide pas `type_proof` ni la logique d'admission.
 
 ---
 

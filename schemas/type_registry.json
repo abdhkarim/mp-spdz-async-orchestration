@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "schemas": {
+    "semi2k-wire-v1": { "kind": "int64" },
+
+    "int64-v1": { "kind": "int64" },
+    "bool-v1": { "kind": "bool" },
+
+    "fixed_point_s2_v1": { "kind": "fixed_point", "scale": 2, "encoding": "unscaled_int64" },
+
+    "vector_int64_len3_v1": { "kind": "vector", "length": 3, "elem": { "kind": "int64" } },
+    "tuple_bool_int64_v1": { "kind": "tuple", "elems": [ { "kind": "bool" }, { "kind": "int64" } ] },
+
+    "record_ab_v1": {
+      "kind": "record",
+      "fields": {
+        "a": { "kind": "int64" },
+        "b": { "kind": "bool" }
+      }
+    },
+
+    "record_nested_v1": {
+      "kind": "record",
+      "fields": {
+        "points": { "kind": "vector", "length": 2, "elem": { "kind": "tuple", "elems": [ { "kind": "int64" }, { "kind": "int64" } ] } },
+        "flag": { "kind": "bool" }
+      }
+    },
+
+    "recursive_list_node_v1": {
+      "kind": "record",
+      "fields": {
+        "head": { "kind": "int64" },
+        "tail": { "kind": "ref", "schema_id": "recursive_list_node_v1", "nullable": true }
+      }
+    }
+  }
+}
+

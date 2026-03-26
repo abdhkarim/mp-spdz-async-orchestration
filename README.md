@@ -4,14 +4,16 @@ Prototype académique de calcul multipartite sécurisé (MPC) branché sur **MP-
 
 Enchaînement :
 
-1. Les fournisseurs envoient des valeurs (fichiers + preuve BLAKE2b).
-2. Le **consensus** décide le **core set** (entrées valides).
-3. Le **bridge** prépare `Player-Data` pour **semi2k**, compile le **programme `.mpc` choisi`** et lance **`semi2k-party.x`** sur ce core set.
+1. Le provider produit `inputs/provider_<id>.txt`, `inputs/provider_<id>_manifest.json`, `inputs/provider_<id>_type_proof.json` et `provider_secrets/provider_<id>_share_<p>.secret`.
+2. Chaque `share_verifier` (un processus par `party_index`) vérifie sa share locale et produit un ACK signé.
+3. Le **consensus** vérifie provider evidence + `type_proof`, puis (en mode ACK) vérifie les ACKs et impose une couverture complète des `party_index` requis ; il écrit `core_set.txt`.
+4. Le **bridge** lit `core_set.txt`, prépare `Player-Data` pour **semi2k**, compile le **programme `.mpc` choisi** et lance **`semi2k-party.x`** ; il n’a aucun rôle d’admission.
 
 ## Objectifs du prototype
 
 - Simuler des absences (provider non soumis).
-- Valider intégrité et authenticité des contributions côté consensus (preuve BLAKE2b + option ACK Ed25519).
+- Valider intégrité et authenticité côté consensus : preuve BLAKE2b keyed + cohérence manifest + `type_proof` vérifié directement par `consensus` (pas de `type_ack`).
+- Valider (en mode ACK) la cohérence de partage via ACK signés par `share_verifier` et une couverture complète des `party_index` requis.
 - Démo MPC sur le core set : **n’importe quel programme semi2k** fourni dans `programs/` (somme, moyenne, etc.).
 - Montrer l’intégration MP-SPDZ (fichiers `Player-Data`, `compile.py`, exécution en ligne semi2k).
 
@@ -31,20 +33,20 @@ Il faut donc **toujours les lancer depuis la racine du dépôt**, pas depuis `bu
 | Code | `node/src/data_provider.cpp` |
 | Binaire | `./build/node/data_provider <id> <valeur> [--computation-nodes N]` |
 | Défaut | `--computation-nodes` vaut **3** si omis |
-| Sortie | `inputs/provider_<id>.txt` (id, valeur masquée, nonce, preuve BLAKE2b) |
-| Secrets | Parts additives de \(s_i\) dans `provider_secrets/` (un fichier `.secret` par partie MPC) |
+| Sortie | `inputs/provider_<id>.txt` (id, valeur masquée, nonce, preuve BLAKE2b), `inputs/provider_<id>_manifest.json`, `inputs/provider_<id>_type_proof.json` |
+| Secrets | Parts additives de \(s_i\) dans `provider_secrets/` : `provider_<id>_share_<p>.secret` |
 
-Variable optionnelle : `MPC_PROVIDER_SECRET` (sinon secret de démo partagé avec le consensus).
+Variable optionnelle : `MPC_PROVIDER_SECRET` (sinon `mpc-demo-secret`, secret de démo partagé avec le consensus).
 
 ### Zone 2 — Consensus
 
 | Élément | Détail |
 |--------|--------|
-| Code | `consensus/src/consensus.cpp`, `consensus/src/ack_crypto_tool.cpp` (signatures ACK) |
+| Code | `consensus/src/consensus.cpp` (admission + vérif `type_proof`), `consensus/src/type_proof.cpp` (backends), `consensus/src/share_verifier.cpp` (production d'ACK) |
 | Binaire | `./build/consensus/consensus [min_inputs] [--acks-dir … --k … …]` |
 | Sortie | `core_set.txt` (un identifiant de provider par ligne) |
 
-Sans `--acks-dir` : validation des preuves sur `inputs/` et besoin d’**au moins `min_inputs`** entrées valides. Avec `--acks-dir` : filtrage additionnel par ACK (seuil `--k`, fenêtre `--timeout-seconds`, etc.).
+Sans `--acks-dir` : consensus valide preuve BLAKE2b + syntaxe du wire + `type_proof` et sélectionne un `core_set.txt` dès qu'il atteint au moins `min_inputs` provider admissibles. Avec `--acks-dir` : en plus, consensus vérifie les ACKs signés et impose une couverture complète des `party_index` `0..k-1` avant d'admettre le provider (`--timeout-seconds` + anti-replay).
 
 ### Zone 3 — Bridge MP-SPDZ (semi2k uniquement)
 
@@ -57,14 +59,14 @@ Sans `--acks-dir` : validation des preuves sur `inputs/` et besoin d’**au moin
 
 Le bridge :
 
-- lit `core_set.txt` et les `inputs/provider_*.txt` ;
-- écrit sous `third_party/MP-SPDZ/Player-Data/` : `Public-Masked-Values` et `Input-P*-0` ;
+- lit `core_set.txt` et, pour chaque provider, ne consomme que `inputs/provider_<id>.txt` (champ `masked_value`) ;
+- charge `provider_secrets/provider_<id>_share_<p>.secret` et écrit sous `third_party/MP-SPDZ/Player-Data/` : `Public-Masked-Values` et `Input-P*-0` ;
 - exécute `python3 compile.py -R 64 …` dans `third_party/MP-SPDZ` en pointant vers le **fichier `.mpc` demandé** (n’importe quel programme du dossier `programs/` ou chemin absolu) ;
 - lance **`third_party/MP-SPDZ/semi2k-party.x`** pour chaque partie (ports `-pn`, hôte `localhost` pour \(p>0\)).
 
 Résultat attendu dans `logs/player_0.log` : lignes `SUM=…` ou `RESULT=…` ; le bridge affiche alors `MP-SPDZ result: …`.
 
-Si `semi2k-party.x` est absent ou si la compilation / MPC échoue, la sortie peut **ne pas** contenir `MP-SPDZ result:` (voir dépannage).
+Si `semi2k-party.x` est absent ou si la compilation / MPC échoue, la sortie peut **ne pas** contenir `MP-SPDZ result:` (pas de fallback plaintext/sum ; voir dépannage).
 
 ### Module `common/`
 
@@ -231,3 +233,9 @@ Les étapes MPC nécessitent **`semi2k-party.x`** et Python opérationnel. Un é
 
 - Consensus centralisé par fichiers (pas de consensus byzantin réaliste).
 - Prototype pédagogique, pas destiné à la production.
+
+## Limitations / Hardening futur
+
+- Si `MPC_PROVIDER_SECRET` est absent : `data_provider` et `consensus` utilisent par défaut `mpc-demo-secret` (auth BLAKE2b keyed) ; à remplacer par un secret distinct, géré proprement, et idéalement rotaté.
+- Prototype single-machine : l'admission (`consensus`) et l'exécution MP-SPDZ tournent localement (souvent via WSL) ; ce n'est pas un réseau distribué byzantin.
+- `type_proof` backends : le backend sémantique actuel (`semantic-schema-v1`) est une preuve sémantique non-ZK (blob validé contre `schemas/type_registry.json`) et ne constitue pas une garantie cryptographique forte finale. Le backend `proof-real-v1` améliore la robustesse via engagements/OR-proof/équation sur engagements, mais reste un prototype (pas un SNARK complet). La garantie cryptographique forte finale nécessite l'intégration d'un système de preuve formellement ZK/SNARK, avec clés et garanties adaptées, sans dépendre des éléments non-ZK du backend sémantique.

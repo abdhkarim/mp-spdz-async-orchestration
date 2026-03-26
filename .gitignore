@@ -72,3 +72,6 @@ Thumbs.db
 .cursorindexingignore
 /artifacts/
 /build-win/
+
+# MP-SPDZ local (gros artefacts, non versionnés)
+/third_party/

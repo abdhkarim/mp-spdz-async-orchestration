@@ -20,7 +20,6 @@
 
 #pragma once
 
-#include <boost/multiprecision/cpp_int.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -29,7 +28,6 @@
 #include <vector>
 
 namespace fs = std::filesystem;
-using boost::multiprecision::cpp_int;
 
 namespace Semi2kPrep {
 
@@ -38,10 +36,10 @@ namespace Semi2kPrep {
 // ---------------------------------------------------------------------------
 
 // One validated provider entry used by prepare_player_data.
+// Masked wire and per-party share files are required (no plaintext-only path).
 struct ProviderEntry {
     int         id            = -1;
     std::string masked_value; // (x_i - s_i) as decimal string (may be negative)
-    std::string plain_value;  // x_i as decimal string (only when no secret was used)
 };
 
 // per_party_shares[provider_id][party_idx] = uint64_t share
@@ -80,17 +78,13 @@ ShareMatrix load_party_shares(const fs::path& root, int party, int n_parties);
  *   c. Writes the public masked-value file:
  *        <mp_spdz_root>/Player-Data/Public-Masked-Values
  *
- * fallback_sum_out receives the plaintext sum (cannot be computed without s_i;
- * it is approximated from fallback plain_value entries only).
- *
  * Returns true on success, false on any failure.
  */
 bool prepare_player_data(
     const fs::path&           mp_spdz_root,
     const std::vector<ProviderEntry>& selected,
     const fs::path&           secrets_root,
-    int                       n_parties,
-    std::string&              fallback_sum_out);
+    int                       n_parties);
 
 // ---------------------------------------------------------------------------
 // 3. Helpers

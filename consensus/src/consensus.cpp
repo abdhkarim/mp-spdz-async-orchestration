@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "type_proof.hpp"
+
 namespace fs = std::filesystem;
 
 // Représente une entrée provider déjà validée syntaxiquement.
@@ -19,16 +21,32 @@ struct ProviderInput {
     int id = -1;
     long long value = 0;
     std::string masked_value_str;  // Pour les valeurs masquées, garde la chaîne complète
+    std::string wire_value_str;    // Raw wire integer string (masked_value or value=...)
     std::string nonce;
     std::string proof;
 };
 
 struct AckEvidence {
+    // Two ACK formats exist in this repo:
+    // 1) "share_verifier" ACKs (modern): include share commitments/digests and
+    //    are signed over a long binding message.
+    // 2) "async_orchestrator" ACKs (legacy): only bind to (session, round,
+    //    provider_id, cn_id, input_hash, timestamp) and don't include share
+    //    commitment fields.
+    bool is_legacy_ack = false;
     std::string session_id;
+    std::string protocol_version;
     int round_id = 0;
+    std::string schema_id;
     int provider_id = -1;
-    int computation_node_id = -1;
-    std::string input_hash;
+    std::string nonce;
+    std::string input_hash; // legacy ACK only
+    int party_index = -1;
+    std::string share_manifest_id;
+    std::string mask_commitment_leaves_digest;
+    std::string share_file_digest;
+    std::string share_commitment;
+    std::string share_commitment_r;
     long long timestamp_unix_ms = 0;
     std::string signature;
 };
@@ -50,6 +68,31 @@ std::optional<long long> parse_integer(const std::string& s) {
     } catch (...) {
         return std::nullopt;
     }
+}
+
+// Canonical wire validation for signed base-10 integers:
+// - no leading '+'
+// - no whitespace
+// - no leading zeros except the exact string "0"
+// - "-0" is rejected (must be "0")
+static bool is_canonical_signed_decimal_wire(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+        if (std::isspace(static_cast<unsigned char>(c))) return false;
+    }
+    if (s[0] == '+') return false;
+    auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+    if (s == "0") return true;
+    if (s[0] == '-') {
+        if (s.size() < 2) return false;
+        if (s[1] == '0') return false; // reject "-01", "-00", ...
+        for (size_t i = 1; i < s.size(); ++i) if (!is_digit(s[i])) return false;
+        return true;
+    }
+    // positive
+    if (s[0] == '0') return false; // reject leading zeros
+    for (char c : s) if (!is_digit(c)) return false;
+    return true;
 }
 
 std::string to_hex(const unsigned char* data, size_t len) {
@@ -147,6 +190,7 @@ std::optional<ProviderInput> parse_provider_file(const fs::path& path) {
     parsed.id = static_cast<int>(*id);
     parsed.value = is_masked ? 0 : *value;  // valeur dummy pour masquées
     parsed.masked_value_str = masked_value_str;
+    parsed.wire_value_str = value_str;
     parsed.nonce = line3.substr(nonce_prefix.size());
     parsed.proof = line4.substr(proof_prefix.size());
     return parsed;
@@ -189,27 +233,82 @@ std::optional<AckEvidence> parse_ack_file(const fs::path& ack_path) {
     }
     const std::string& json = *content_opt;
 
+    // ---------------------------
+    // Try modern ACK first
+    // ---------------------------
     const auto session_id = parse_json_string_field(json, "session_id");
+    const auto protocol_version = parse_json_string_field(json, "protocol_version");
     const auto round_id = parse_json_int_field(json, "round_id");
+    const auto schema_id = parse_json_string_field(json, "schema_id");
     const auto provider_id = parse_json_int_field(json, "provider_id");
-    const auto computation_node_id = parse_json_int_field(json, "computation_node_id");
-    const auto input_hash = parse_json_string_field(json, "input_hash");
+    const auto nonce = parse_json_string_field(json, "nonce");
+    const auto party_index = parse_json_int_field(json, "party_index");
+    const auto share_manifest_id = parse_json_string_field(json, "share_manifest_id");
+    const auto mask_commitment_leaves_digest = parse_json_string_field(json, "mask_commitment_leaves_digest");
+    const auto share_file_digest = parse_json_string_field(json, "share_file_digest");
+    const auto share_commitment = parse_json_string_field(json, "share_commitment");
+    const auto share_commitment_r = parse_json_string_field(json, "share_commitment_r");
     const auto timestamp_unix_ms = parse_json_int_field(json, "timestamp_unix_ms");
     const auto signature = parse_json_string_field(json, "signature");
 
-    if (!session_id || !round_id || !provider_id || !computation_node_id ||
-        !input_hash || !timestamp_unix_ms || !signature) {
+    if (session_id && protocol_version && round_id && schema_id && provider_id && nonce && party_index &&
+        share_manifest_id && mask_commitment_leaves_digest && share_file_digest && share_commitment &&
+        share_commitment_r && timestamp_unix_ms && signature) {
+        AckEvidence ack;
+        ack.is_legacy_ack = false;
+        ack.session_id = *session_id;
+        ack.protocol_version = *protocol_version;
+        ack.round_id = static_cast<int>(*round_id);
+        ack.schema_id = *schema_id;
+        ack.provider_id = static_cast<int>(*provider_id);
+        ack.nonce = *nonce;
+        ack.party_index = static_cast<int>(*party_index);
+        ack.share_manifest_id = *share_manifest_id;
+        ack.mask_commitment_leaves_digest = *mask_commitment_leaves_digest;
+        ack.share_file_digest = *share_file_digest;
+        ack.share_commitment = *share_commitment;
+        ack.share_commitment_r = *share_commitment_r;
+        ack.timestamp_unix_ms = *timestamp_unix_ms;
+        ack.signature = *signature;
+        return ack;
+    }
+
+    // ---------------------------
+    // Fallback: legacy ACK format
+    // (generated by scripts/async_orchestrator.py)
+    //
+    // Fields:
+    //  - session_id, round_id, provider_id
+    //  - computation_node_id (maps to party_index)
+    //  - input_hash
+    //  - timestamp_unix_ms, signature
+    // ---------------------------
+    const auto legacy_session_id = parse_json_string_field(json, "session_id");
+    const auto legacy_round_id = parse_json_int_field(json, "round_id");
+    const auto legacy_provider_id = parse_json_int_field(json, "provider_id");
+    const auto legacy_party_index = parse_json_int_field(json, "computation_node_id");
+    const auto legacy_input_hash = parse_json_string_field(json, "input_hash");
+    const auto legacy_timestamp_unix_ms = parse_json_int_field(json, "timestamp_unix_ms");
+    const auto legacy_signature = parse_json_string_field(json, "signature");
+
+    if (!legacy_session_id || !legacy_round_id || !legacy_provider_id || !legacy_party_index ||
+        !legacy_input_hash || !legacy_timestamp_unix_ms || !legacy_signature) {
         return std::nullopt;
     }
 
     AckEvidence ack;
-    ack.session_id = *session_id;
-    ack.round_id = static_cast<int>(*round_id);
-    ack.provider_id = static_cast<int>(*provider_id);
-    ack.computation_node_id = static_cast<int>(*computation_node_id);
-    ack.input_hash = *input_hash;
-    ack.timestamp_unix_ms = *timestamp_unix_ms;
-    ack.signature = *signature;
+    ack.is_legacy_ack = true;
+    ack.session_id = *legacy_session_id;
+    ack.protocol_version.clear();
+    ack.round_id = static_cast<int>(*legacy_round_id);
+    ack.schema_id.clear();
+    ack.provider_id = static_cast<int>(*legacy_provider_id);
+    ack.nonce.clear();
+    ack.input_hash = *legacy_input_hash;
+    ack.party_index = static_cast<int>(*legacy_party_index);
+    ack.timestamp_unix_ms = *legacy_timestamp_unix_ms;
+    ack.signature = *legacy_signature;
+    // Remaining modern-only fields stay empty.
     return ack;
 }
 
@@ -228,6 +327,106 @@ std::optional<std::string> hash_file_blake2b_hex(const fs::path& file_path) {
                               content.size());
     crypto_generichash_final(&state, digest, sizeof(digest));
     return to_hex(digest, sizeof(digest));
+}
+
+// Unkeyed BLAKE2b-256 hex digest (64 chars), over ASCII bytes.
+static std::string blake2b_hex32_unkeyed(const std::string& msg) {
+    unsigned char digest[32] = {0};
+    crypto_generichash_state state;
+    crypto_generichash_init(&state, nullptr, 0, sizeof(digest));
+    crypto_generichash_update(&state,
+                              reinterpret_cast<const unsigned char*>(msg.data()),
+                              msg.size());
+    crypto_generichash_final(&state, digest, sizeof(digest));
+    return to_hex(digest, sizeof(digest));
+}
+
+struct ProviderManifestEvidence {
+    std::string share_manifest_id;
+    std::string mask_commitment_leaves_digest;
+    int num_parties = -1;
+    std::vector<std::string> share_file_digests_by_party;
+    std::vector<std::string> share_commitments_by_party;
+    std::vector<std::string> share_commitment_rs_by_party;
+};
+
+struct ProviderManifestMinimal {
+    std::string share_manifest_id;
+    std::string mask_commitment_leaves_digest;
+    int num_parties = -1;
+};
+
+static std::optional<ProviderManifestEvidence> parse_provider_manifest(
+    const fs::path& manifest_path,
+    int expected_num_parties) {
+    const auto content_opt = read_text_file(manifest_path);
+    if (!content_opt) return std::nullopt;
+    const std::string& json = *content_opt;
+
+    const auto share_manifest_id = parse_json_string_field(json, "share_manifest_id");
+    const auto mask_commitment_leaves_digest = parse_json_string_field(json, "mask_commitment_leaves_digest");
+    const auto n_opt = parse_json_int_field(json, "num_parties");
+    if (!share_manifest_id || !mask_commitment_leaves_digest || !n_opt) return std::nullopt;
+
+    const int num_parties = static_cast<int>(*n_opt);
+    ProviderManifestEvidence ev;
+    ev.share_manifest_id = *share_manifest_id;
+    ev.mask_commitment_leaves_digest = *mask_commitment_leaves_digest;
+    ev.num_parties = num_parties;
+    ev.share_file_digests_by_party.assign(static_cast<size_t>(expected_num_parties), "");
+    ev.share_commitments_by_party.assign(static_cast<size_t>(expected_num_parties), "");
+    ev.share_commitment_rs_by_party.assign(static_cast<size_t>(expected_num_parties), "");
+
+    for (int p = 0; p < expected_num_parties; ++p) {
+        // We rely on the manifest being generated by this repo with stable formatting.
+        const std::string re_str =
+            "\"party_index\"\\s*:\\s*" + std::to_string(p) +
+            "\\s*,\\s*\"share_file_digest\"\\s*:\\s*\"([a-fA-F0-9]{64})\""
+            "\\s*,\\s*\"share_leaf_digest\"\\s*:\\s*\"([a-fA-F0-9]{64})\""
+            "\\s*,\\s*\"share_commitment\"\\s*:\\s*\"([a-fA-F0-9]{64})\""
+            "\\s*,\\s*\"share_commitment_r\"\\s*:\\s*\"([a-fA-F0-9]{64})\"";
+        const std::regex re(re_str);
+        std::smatch m;
+        if (!std::regex_search(json, m, re)) return std::nullopt;
+        ev.share_file_digests_by_party[static_cast<size_t>(p)] = m[1].str();
+        ev.share_commitments_by_party[static_cast<size_t>(p)] = m[3].str();
+        ev.share_commitment_rs_by_party[static_cast<size_t>(p)] = m[4].str();
+    }
+
+    return ev;
+}
+
+static std::optional<ProviderManifestMinimal> parse_provider_manifest_minimal(
+    const fs::path& manifest_path) {
+    const auto content_opt = read_text_file(manifest_path);
+    if (!content_opt) return std::nullopt;
+    const std::string& json = *content_opt;
+
+    const auto share_manifest_id = parse_json_string_field(json, "share_manifest_id");
+    const auto mask_commitment_leaves_digest =
+        parse_json_string_field(json, "mask_commitment_leaves_digest");
+    const auto n_opt = parse_json_int_field(json, "num_parties");
+    if (!share_manifest_id || !mask_commitment_leaves_digest || !n_opt) return std::nullopt;
+
+    ProviderManifestMinimal out;
+    out.share_manifest_id = *share_manifest_id;
+    out.mask_commitment_leaves_digest = *mask_commitment_leaves_digest;
+    out.num_parties = static_cast<int>(*n_opt);
+    return out;
+}
+
+
+static std::string compute_share_manifest_id_from_provider_input(
+    const ProviderInput& provider,
+    int expected_num_parties) {
+    const std::string masked_wire =
+        provider.masked_value_str.empty() ? std::to_string(provider.value) : provider.masked_value_str;
+    const std::string manifest_input =
+        "provider_id=" + std::to_string(provider.id) +
+        ";nonce=" + provider.nonce +
+        ";masked_value=" + masked_wire +
+        ";num_parties=" + std::to_string(expected_num_parties);
+    return blake2b_hex32_unkeyed(manifest_input);
 }
 
 std::optional<std::vector<unsigned char>> from_hex(const std::string& hex) {
@@ -263,17 +462,35 @@ std::string trim_ascii_ws(const std::string& s) {
 }
 
 std::string ack_signing_message(const AckEvidence& ack) {
-    return ack.session_id + "|" +
+    // Signatures bind exactly to the fields below (byte-for-byte stability
+    // is important for acceptance).
+    if (ack.is_legacy_ack) {
+        // Must match scripts/async_orchestrator.py::ack_signing_message().
+        return ack.session_id + "|" +
+               std::to_string(ack.round_id) + "|" +
+               std::to_string(ack.provider_id) + "|" +
+               std::to_string(ack.party_index) + "|" +
+               ack.input_hash + "|" +
+               std::to_string(ack.timestamp_unix_ms);
+    }
+
+    return ack.protocol_version + "|" +
            std::to_string(ack.round_id) + "|" +
+           ack.schema_id + "|" +
            std::to_string(ack.provider_id) + "|" +
-           std::to_string(ack.computation_node_id) + "|" +
-           ack.input_hash + "|" +
+           ack.nonce + "|" +
+           std::to_string(ack.party_index) + "|" +
+           ack.share_manifest_id + "|" +
+           ack.mask_commitment_leaves_digest + "|" +
+           ack.share_file_digest + "|" +
+           ack.share_commitment + "|" +
+           ack.share_commitment_r + "|" +
            std::to_string(ack.timestamp_unix_ms);
 }
 
 bool verify_ack_signature(const AckEvidence& ack, const fs::path& cn_keys_dir) {
     const fs::path pk_file =
-        cn_keys_dir / ("cn_" + std::to_string(ack.computation_node_id) + ".pub.hex");
+        cn_keys_dir / ("cn_" + std::to_string(ack.party_index) + ".pub.hex");
     const auto pk_hex_opt = read_text_file(pk_file);
     if (!pk_hex_opt) return false;
     const auto pk_opt = from_hex(trim_ascii_ws(*pk_hex_opt));
@@ -335,7 +552,7 @@ void write_justification_json(const fs::path& path,
         << "  \"accepted\": [\n";
     for (size_t i = 0; i < accepted.size(); ++i) {
         out << "    {\"provider_id\": " << accepted[i]
-            << ", \"reason\": \"k_of_n_valid_acks\""
+            << ", \"reason\": \"full_party_index_coverage\""
             << ", \"distinct_ack_count\": " << (distinct_acks_by_provider.count(accepted[i]) ? distinct_acks_by_provider.at(accepted[i]) : 0)
             << ", \"ack_files\": [";
         if (evidence_files.count(accepted[i])) {
@@ -393,9 +610,11 @@ int main(int argc, char* argv[]) {
     bool min_inputs_set = false;
     bool ack_mode = false;
     fs::path acks_dir;
-    int k_required = 2;
+    int k_required = 0;  // In ACK mode: required coverage size (#party indices).
     std::string session_id = "demo-session";
     int round_id = 0;
+    std::string protocol_version = "1";
+    std::string schema_id = "semi2k-wire-v1";
     int timeout_seconds = 0;
     fs::path artifacts_dir = fs::current_path() / "artifacts";
     fs::path cn_keys_dir = fs::current_path() / "artifacts" / "cn_keys";
@@ -426,6 +645,35 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             k_required = static_cast<int>(*parsed);
+            continue;
+        }
+        if (arg == "--num-parties") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --num-parties\n";
+                return 1;
+            }
+            const auto parsed = parse_integer(argv[++i]);
+            if (!parsed || *parsed <= 0) {
+                std::cerr << "Invalid value for --num-parties\n";
+                return 1;
+            }
+            k_required = static_cast<int>(*parsed);
+            continue;
+        }
+        if (arg == "--protocol-version") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --protocol-version\n";
+                return 1;
+            }
+            protocol_version = argv[++i];
+            continue;
+        }
+        if (arg == "--schema-id") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --schema-id\n";
+                return 1;
+            }
+            schema_id = argv[++i];
             continue;
         }
         if (arg == "--session-id") {
@@ -507,10 +755,12 @@ int main(int argc, char* argv[]) {
     std::map<int, int> distinct_acks_by_provider;
     std::map<int, std::vector<std::string>> evidence_files_by_provider;
 
-    if (clean_inputs && fs::exists(inputs_dir)) {
+        if (clean_inputs && fs::exists(inputs_dir)) {
         // Nettoyage défensif: supprime uniquement les fichiers provider_*.txt obsolètes.
         // Les fichiers récents (potentiellement de l'exécution courante) sont conservés.
-        const std::regex filename_regex(R"(provider_(\d+)\.txt)");
+            const std::regex provider_txt_regex(R"(provider_(\d+)\.txt)");
+            const std::regex provider_manifest_json_regex(R"(provider_(\d+)_manifest\.json)");
+            const std::regex provider_type_proof_json_regex(R"(provider_(\d+)_type_proof\.json)");
         const auto now = fs::file_time_type::clock::now();
         constexpr auto stale_grace = std::chrono::seconds(30);
         size_t removed_count = 0;
@@ -522,9 +772,11 @@ int main(int argc, char* argv[]) {
 
             const std::string filename = entry.path().filename().string();
             std::smatch match;
-            if (!std::regex_match(filename, match, filename_regex)) {
-                continue;
-            }
+            const bool match_any =
+                std::regex_match(filename, match, provider_txt_regex) ||
+                std::regex_match(filename, match, provider_manifest_json_regex) ||
+                std::regex_match(filename, match, provider_type_proof_json_regex);
+            if (!match_any) continue;
 
             std::error_code ec;
             const auto last_write = fs::last_write_time(entry.path(), ec);
@@ -582,6 +834,76 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
+            // Canonical masked wire validation: this is a purely syntactic check
+            // on the decimal integer string.
+            if (!is_canonical_signed_decimal_wire(parsed->wire_value_str)) {
+                std::cout << "Ignoring provider file with non-canonical integer wire: "
+                          << entry.path() << "\n";
+                continue;
+            }
+
+            // Type proof layer: semantic type validity remains consensus-verified.
+            // This is provider-side (no type_ack) and consumed directly here.
+            {
+                const fs::path manifest_path =
+                    inputs_dir / ("provider_" + std::to_string(parsed->id) + "_manifest.json");
+                const fs::path type_proof_path =
+                    inputs_dir / ("provider_" + std::to_string(parsed->id) + "_type_proof.json");
+
+                const auto manifest_min_opt = parse_provider_manifest_minimal(manifest_path);
+                if (!manifest_min_opt) {
+                    std::cout << "Ignoring provider: missing/invalid manifest for type_proof "
+                              << entry.path() << "\n";
+                    continue;
+                }
+                // In ACK mode, `k_required` is an ACK coverage threshold, not
+                // necessarily the total number of parties in the provider manifest.
+                // We only need the manifest to contain at least the required
+                // party indices [0..k_required-1].
+                if (ack_mode && manifest_min_opt->num_parties < k_required) {
+                    std::cout << "Ignoring provider: manifest num_parties mismatch for type_proof "
+                              << entry.path() << "\n";
+                    continue;
+                }
+
+                // Binding defense: ensure provider evidence -> manifest share_manifest_id
+                // (this is re-computable from provider file only).
+                {
+                    const std::string expected_smid =
+                        compute_share_manifest_id_from_provider_input(*parsed,
+                                                                        manifest_min_opt->num_parties);
+                    if (expected_smid != manifest_min_opt->share_manifest_id) {
+                        std::cout << "Ignoring provider: manifest share_manifest_id mismatch for type_proof "
+                                  << entry.path() << "\n";
+                        continue;
+                    }
+                }
+
+                const auto tp_opt = type_proof::load_evidence_file(type_proof_path.string());
+                if (!tp_opt) {
+                    std::cout << "Ignoring provider: missing/invalid type_proof artifact: "
+                              << type_proof_path << "\n";
+                    continue;
+                }
+
+                std::string reason;
+                type_proof::ProviderEvidenceView provider_view;
+                provider_view.provider_id = parsed->id;
+                provider_view.nonce = parsed->nonce;
+                provider_view.masked_wire = parsed->wire_value_str;
+
+                type_proof::ManifestMinimalView manifest_view;
+                manifest_view.share_manifest_id = manifest_min_opt->share_manifest_id;
+                manifest_view.mask_commitment_leaves_digest = manifest_min_opt->mask_commitment_leaves_digest;
+
+                if (!type_proof::verify_for_provider(
+                        provider_view, manifest_view, *tp_opt, schema_id, &reason)) {
+                    std::cout << "Ignoring provider: type_proof verification failed (" << reason
+                              << "): " << entry.path() << "\n";
+                    continue;
+                }
+            }
+
             core_set_ids.push_back(parsed->id);
         }
     }
@@ -591,11 +913,52 @@ int main(int argc, char* argv[]) {
             std::cerr << "ACK mode enabled but acks directory not found: " << acks_dir << "\n";
             return 1;
         }
+        if (k_required <= 0) {
+            std::cerr << "ACK mode enabled but --num-parties (required coverage size) not provided.\n";
+            return 1;
+        }
+
+        const std::set<int> candidate_providers(core_set_ids.begin(), core_set_ids.end());
+        if (candidate_providers.empty()) {
+            std::cerr << "ACK mode enabled but no candidate providers after provider-input validation.\n";
+            return 1;
+        }
 
         std::map<int, std::set<int>> distinct_acks_by_provider_set;
-        std::set<std::pair<int, int>> seen_provider_cn;
+        std::set<std::pair<int, int>> seen_provider_party;
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+
+        std::map<int, ProviderInput> provider_ev_cache;
+        std::map<int, ProviderManifestEvidence> manifest_ev_cache;
+
+        auto get_provider_ev = [&](int provider_id) -> std::optional<ProviderInput> {
+            if (provider_ev_cache.count(provider_id)) return provider_ev_cache[provider_id];
+            const fs::path provider_file = inputs_dir / ("provider_" + std::to_string(provider_id) + ".txt");
+            const auto parsed = parse_provider_file(provider_file);
+            if (!parsed) return std::nullopt;
+            if (parsed->id != provider_id) return std::nullopt;
+            provider_ev_cache[provider_id] = *parsed;
+            return provider_ev_cache[provider_id];
+        };
+
+        auto get_manifest_ev = [&](int provider_id) -> std::optional<ProviderManifestEvidence> {
+            if (manifest_ev_cache.count(provider_id)) return manifest_ev_cache[provider_id];
+            const fs::path manifest_path = inputs_dir / ("provider_" + std::to_string(provider_id) + "_manifest.json");
+            const auto parsed = parse_provider_manifest(manifest_path, k_required);
+            if (!parsed) return std::nullopt;
+
+            // Defense against manifest tampering: recompute share_manifest_id
+            // from provider input evidence (public fields only).
+            const auto provider_opt = get_provider_ev(provider_id);
+            if (!provider_opt) return std::nullopt;
+            const std::string expected_smid =
+                compute_share_manifest_id_from_provider_input(*provider_opt, parsed->num_parties);
+            if (expected_smid != parsed->share_manifest_id) return std::nullopt;
+
+            manifest_ev_cache[provider_id] = *parsed;
+            return manifest_ev_cache[provider_id];
+        };
 
         const std::regex ack_filename_regex(R"(ack_.*\.json)");
         for (const auto& entry : fs::directory_iterator(acks_dir)) {
@@ -608,6 +971,32 @@ int main(int argc, char* argv[]) {
             const AckEvidence& ack = *ack_opt;
 
             if (ack.session_id != session_id || ack.round_id != round_id) continue;
+            if (!ack.is_legacy_ack &&
+                (ack.protocol_version != protocol_version || ack.schema_id != schema_id)) continue;
+            if (!candidate_providers.count(ack.provider_id)) continue;
+            if (ack.party_index < 0 || ack.party_index >= k_required) continue;
+
+            const auto provider_ev_opt = get_provider_ev(ack.provider_id);
+            if (!provider_ev_opt) {
+                rejected_reasons[ack.provider_id] = "missing_provider_evidence";
+                continue;
+            }
+
+            if (!ack.is_legacy_ack) {
+                if (ack.nonce != provider_ev_opt->nonce) {
+                    rejected_reasons[ack.provider_id] = "ack_nonce_mismatch";
+                    continue;
+                }
+            } else {
+                // Legacy ACKs sign the raw provider file hash.
+                const fs::path provider_path = inputs_dir / ("provider_" + std::to_string(ack.provider_id) + ".txt");
+                const auto expected_hash_opt = hash_file_blake2b_hex(provider_path);
+                if (!expected_hash_opt || *expected_hash_opt != ack.input_hash) {
+                    rejected_reasons[ack.provider_id] = "ack_input_hash_mismatch";
+                    continue;
+                }
+            }
+
             if (!verify_ack_signature(ack, cn_keys_dir)) {
                 rejected_reasons[ack.provider_id] = "invalid_signature";
                 continue;
@@ -621,38 +1010,71 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            const fs::path provider_file = inputs_dir / ("provider_" + std::to_string(ack.provider_id) + ".txt");
-            const auto hash_opt = hash_file_blake2b_hex(provider_file);
-            if (!hash_opt || *hash_opt != ack.input_hash) {
-                rejected_reasons[ack.provider_id] = "ack_hash_mismatch_or_missing_provider_file";
-                continue;
+            if (!ack.is_legacy_ack) {
+                const auto manifest_ev_opt = get_manifest_ev(ack.provider_id);
+                if (!manifest_ev_opt) {
+                    rejected_reasons[ack.provider_id] = "missing_or_invalid_provider_manifest";
+                    continue;
+                }
+
+                if (ack.share_manifest_id != manifest_ev_opt->share_manifest_id) {
+                    rejected_reasons[ack.provider_id] = "ack_share_manifest_id_mismatch";
+                    continue;
+                }
+                if (ack.mask_commitment_leaves_digest != manifest_ev_opt->mask_commitment_leaves_digest) {
+                    rejected_reasons[ack.provider_id] = "ack_mask_commitment_digest_mismatch";
+                    continue;
+                }
+                if (ack.share_file_digest !=
+                    manifest_ev_opt->share_file_digests_by_party[static_cast<size_t>(ack.party_index)]) {
+                    rejected_reasons[ack.provider_id] = "ack_share_file_digest_mismatch";
+                    continue;
+                }
+                if (ack.share_commitment !=
+                    manifest_ev_opt->share_commitments_by_party[static_cast<size_t>(ack.party_index)]) {
+                    rejected_reasons[ack.provider_id] = "ack_share_commitment_mismatch";
+                    continue;
+                }
+                if (ack.share_commitment_r !=
+                    manifest_ev_opt->share_commitment_rs_by_party[static_cast<size_t>(ack.party_index)]) {
+                    rejected_reasons[ack.provider_id] = "ack_share_commitment_r_mismatch";
+                    continue;
+                }
             }
 
-            const std::pair<int, int> replay_key{ack.provider_id, ack.computation_node_id};
-            if (seen_provider_cn.count(replay_key) != 0) {
+            const std::pair<int, int> replay_key{ack.provider_id, ack.party_index};
+            if (seen_provider_party.count(replay_key) != 0) {
                 rejected_reasons[ack.provider_id] = "ack_replay_detected";
                 continue;
             }
-            seen_provider_cn.insert(replay_key);
-            distinct_acks_by_provider_set[ack.provider_id].insert(ack.computation_node_id);
+            seen_provider_party.insert(replay_key);
+            distinct_acks_by_provider_set[ack.provider_id].insert(ack.party_index);
             evidence_files_by_provider[ack.provider_id].push_back(entry.path().filename().string());
         }
 
-        for (const auto& [provider_id, cn_ids] : distinct_acks_by_provider_set) {
-            distinct_acks_by_provider[provider_id] = static_cast<int>(cn_ids.size());
+        for (const auto& [provider_id, party_ids] : distinct_acks_by_provider_set) {
+            distinct_acks_by_provider[provider_id] = static_cast<int>(party_ids.size());
         }
 
         std::vector<int> ack_selected;
         for (int provider_id : core_set_ids) {
-            const int n_distinct_acks =
-                (distinct_acks_by_provider.count(provider_id) ? distinct_acks_by_provider[provider_id] : 0);
-            if (n_distinct_acks >= k_required) {
-                ack_selected.push_back(provider_id);
-            } else {
-                if (rejected_reasons.count(provider_id) == 0) {
-                    rejected_reasons[provider_id] = "insufficient_distinct_acks";
+            const auto it = distinct_acks_by_provider_set.find(provider_id);
+            if (it == distinct_acks_by_provider_set.end()) {
+                if (rejected_reasons.count(provider_id) == 0) rejected_reasons[provider_id] = "missing_any_ack";
+                continue;
+            }
+            const auto& covered_parties = it->second;
+            bool coverage_ok = true;
+            std::string missing_parties;
+            for (int p = 0; p < k_required; ++p) {
+                if (covered_parties.count(p) == 0) {
+                    coverage_ok = false;
+                    if (!missing_parties.empty()) missing_parties += ",";
+                    missing_parties += std::to_string(p);
                 }
             }
+            if (coverage_ok) ack_selected.push_back(provider_id);
+            else if (rejected_reasons.count(provider_id) == 0) rejected_reasons[provider_id] = "missing_party_indices:" + missing_parties;
         }
         core_set_ids = ack_selected;
     }
