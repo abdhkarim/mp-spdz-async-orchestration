@@ -33,6 +33,17 @@
           "reason": {
             "type": "string",
             "minLength": 1
+          },
+          "distinct_ack_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ack_files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
@@ -51,6 +62,17 @@
           "reason": {
             "type": "string",
             "minLength": 1
+          },
+          "distinct_ack_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ack_files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }

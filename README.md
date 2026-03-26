@@ -196,6 +196,8 @@ Ne pas appeler `consensus 3` avec seulement deux fichiers provider valides : éc
 
 `scripts/run_async_round_wsl.sh` compile les binaires nécessaires puis appelle l’orchestrateur. **Il n’y a pas d’option `--backend`** (le champ `backend: semi2k` dans `artifacts/run_meta.json` est informatif). L’orchestrateur lance le bridge **sans** argument de programme : exécution du défaut **`programs/sum.mpc`**. Pour un autre `.mpc`, lancer `spdz_bridge` manuellement avec le chemin voulu après le round.
 
+En mode ACK, l’orchestrateur génère les ACKs **uniquement** via `consensus/share_verifier` (un ACK moderne par `party_index`). `consensus` ne supporte plus d’ancien format d’ACK.
+
 ```bash
 ./scripts/run_async_round_wsl.sh \
   --clean \
@@ -209,6 +211,8 @@ Ne pas appeler `consensus 3` avec seulement deux fichiers provider valides : éc
 ```
 
 Artefacts : `artifacts/run_meta.json`, `artifacts/core_set.json`, `artifacts/justification.json`, `artifacts/acks/`, `artifacts/cn_keys/`. Schémas : `schemas/*.schema.json`.
+
+Astuce tests : `--skip-bridge` permet de s’arrêter après la décision du consensus (utile si `semi2k-party.x` n’est pas compilé).
 
 ## Tests d’intégration complets
 

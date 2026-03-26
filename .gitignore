@@ -67,6 +67,9 @@ Thumbs.db
 # Local test run logs (full integration runs)
 .tmp_full_test_runs/
 
+# Local test summary (generated)
+/backend_test_summary.txt
+
 # Cursor / local tooling (not part of the project tree)
 .cursorignore
 .cursorindexingignore

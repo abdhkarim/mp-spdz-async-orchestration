@@ -91,7 +91,7 @@ SCENARIOS=(
   "normal:ok"
   "insufficient-acks:fail"
   "replay-ack:ok"
-  "hash-mismatch:fail"
+  "tampered-ack:fail"
   "stale-ack:fail"
 )
 
@@ -108,6 +108,7 @@ for item in "${SCENARIOS[@]}"; do
     --providers 1:10,2:20,3:30,4:40,5:50 \
     --computation-nodes 3 \
     --ack-timeout-seconds 2 \
+    --skip-bridge \
     --scenario "${scenario}"
   rc=$?
   set -e

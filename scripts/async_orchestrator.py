@@ -15,7 +15,6 @@ It implements an explicit state machine:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -56,24 +55,6 @@ def run_command_capture(args: List[str], cwd: Path, env: dict | None = None) -> 
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-
-def compute_file_hash(path: Path) -> str:
-    return hashlib.blake2b(path.read_bytes(), digest_size=32).hexdigest()
-
-
-def ack_signing_message(
-    session_id: str,
-    round_id: int,
-    provider_id: int,
-    computation_node_id: int,
-    input_hash: str,
-    timestamp_unix_ms: int,
-) -> str:
-    return (
-        f"{session_id}|{round_id}|{provider_id}|{computation_node_id}|"
-        f"{input_hash}|{timestamp_unix_ms}"
-    )
 
 
 def read_core_set(core_set_path: Path) -> List[int]:
@@ -149,7 +130,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--scenario",
-        choices=["normal", "insufficient-acks", "replay-ack", "hash-mismatch", "stale-ack"],
+        choices=["normal", "insufficient-acks", "replay-ack", "tampered-ack", "stale-ack"],
         default="normal",
         help="Generate a deterministic negative-path test scenario",
     )
@@ -163,6 +144,11 @@ def main() -> int:
         "--clean",
         action="store_true",
         help="Remove inputs/core_set/logs/artifacts before run",
+    )
+    parser.add_argument(
+        "--skip-bridge",
+        action="store_true",
+        help="Stop after consensus decision (do not run spdz_bridge / MP-SPDZ)",
     )
     args = parser.parse_args()
 
@@ -245,9 +231,13 @@ def main() -> int:
                 env=os.environ.copy(),
             )
 
+    share_verifier_bin = build_dir / "consensus" / "share_verifier"
+    if not share_verifier_bin.exists():
+        raise OrchestratorError(
+            f"Missing {share_verifier_bin}. Rebuild with target share_verifier."
+        )
+
     for p in providers:
-        provider_file = inputs_dir / f"provider_{p.provider_id}.txt"
-        input_hash = compute_file_hash(provider_file)
         provider_ack_nodes = ack_nodes
         if args.scenario == "insufficient-acks" and p.provider_id == providers[-1].provider_id:
             provider_ack_nodes = max(0, args.k_acks - 1)
@@ -255,41 +245,52 @@ def main() -> int:
             ts = int(time.time() * 1000)
             if args.scenario == "stale-ack" and p.provider_id == providers[-1].provider_id:
                 ts = ts - max(1, args.ack_timeout_seconds + 5) * 1000
-            ack_hash = input_hash
-            if args.scenario == "hash-mismatch" and p.provider_id == providers[-1].provider_id and cn_id == 0:
-                ack_hash = "0" * 64
-            ack_payload = {
-                "session_id": args.session_id,
-                "round_id": args.round_id,
-                "provider_id": p.provider_id,
-                "computation_node_id": cn_id,
-                "input_hash": ack_hash,
-                "timestamp_unix_ms": ts,
-            }
-            sec_file = cn_keys_dir / f"cn_{cn_id}.sec.hex"
-            msg = ack_signing_message(
-                args.session_id,
-                args.round_id,
-                p.provider_id,
-                cn_id,
-                ack_hash,
-                ts,
-            )
-            signature = run_command_capture(
-                [str(ack_crypto_tool), "sign", str(sec_file), msg],
+            run_command(
+                [
+                    str(share_verifier_bin),
+                    "--session-id",
+                    args.session_id,
+                    "--round-id",
+                    str(args.round_id),
+                    "--protocol-version",
+                    "1",
+                    "--schema-id",
+                    "semi2k-wire-v1",
+                    "--provider-id",
+                    str(p.provider_id),
+                    "--party-index",
+                    str(cn_id),
+                    "--inputs-dir",
+                    str(inputs_dir),
+                    "--provider-secrets-dir",
+                    str(repo_root / "provider_secrets"),
+                    "--share-manifest-path",
+                    str(inputs_dir / f"provider_{p.provider_id}_manifest.json"),
+                    "--cn-keys-dir",
+                    str(cn_keys_dir),
+                    "--acks-out-dir",
+                    str(acks_dir),
+                    "--timestamp-unix-ms",
+                    str(ts),
+                ],
                 cwd=repo_root,
                 env=os.environ.copy(),
             )
-            ack_payload["signature"] = signature
-            write_json(
-                acks_dir / f"ack_p{p.provider_id}_cn{cn_id}.json",
-                ack_payload,
-            )
+
             if args.scenario == "replay-ack" and p.provider_id == providers[-1].provider_id and cn_id == 0:
-                write_json(
-                    acks_dir / f"ack_p{p.provider_id}_cn{cn_id}_replay.json",
-                    ack_payload,
-                )
+                # Duplicate the same provider+party ack under a different filename (replay detection).
+                src = acks_dir / f"ack_p{p.provider_id}_party{cn_id}.json"
+                dst = acks_dir / f"ack_p{p.provider_id}_party{cn_id}_replay.json"
+                if src.exists():
+                    shutil.copyfile(src, dst)
+
+            if args.scenario == "tampered-ack" and p.provider_id == providers[-1].provider_id and cn_id == 0:
+                # Tamper with one binding field after signing (signature must fail).
+                ack_path = acks_dir / f"ack_p{p.provider_id}_party{cn_id}.json"
+                if ack_path.exists():
+                    d = json.loads(ack_path.read_text(encoding="utf-8"))
+                    d["share_file_digest"] = "0" * 64
+                    ack_path.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
     state = "DECIDED"
     print(f"[state] {state}")
@@ -301,6 +302,8 @@ def main() -> int:
             str(acks_dir),
             "--k",
             str(args.k_acks),
+            "--num-parties",
+            str(args.computation_nodes),
             "--session-id",
             args.session_id,
             "--round-id",
@@ -311,6 +314,10 @@ def main() -> int:
             str(artifacts_dir),
             "--cn-keys-dir",
             str(cn_keys_dir),
+            "--protocol-version",
+            "1",
+            "--schema-id",
+            "semi2k-wire-v1",
         ],
         cwd=repo_root,
         env=os.environ.copy(),
@@ -322,6 +329,12 @@ def main() -> int:
 
     state = "PREPARED"
     print(f"[state] {state}")
+
+    if args.skip_bridge:
+        state = "DONE"
+        print(f"[state] {state}")
+        print("[ok] Round decided (bridge skipped). Artifacts written to artifacts/")
+        return 0
 
     state = "RUNNING"
     print(f"[state] {state}")
