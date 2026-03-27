@@ -33,6 +33,152 @@ def is_windows() -> bool:
     return os.name == "nt"
 
 
+class WorkflowFlowchart(ttk.Frame):
+    """
+    Global, persistent workflow visualization.
+    Renders a simple flowchart:
+      Provider(s) -> ACK generation -> Consensus -> Optional bridge -> Optional MP-SPDZ
+    Each node can be in: idle | running | success | failed (strong visual color coding).
+    """
+
+    def __init__(self, master: tk.Misc):
+        super().__init__(master)
+        self.canvas = tk.Canvas(self, height=110, highlightthickness=0, bg="white")
+        self.canvas.pack(fill="both", expand=True)
+
+        self.case_var = tk.StringVar(value="")
+        self.case_label = ttk.Label(self, textvariable=self.case_var)
+        self.case_label.place(x=12, y=8)
+
+        self.steps: list[tuple[str, str, bool]] = [
+            ("providers", "Provider(s)", False),
+            ("ack", "ACK generation", False),
+            ("consensus", "Consensus", False),
+            ("bridge", "Optional bridge", True),
+            ("mp_spdz", "Optional MP-SPDZ", True),
+        ]
+        self._state: dict[str, str] = {k: "idle" for k, _t, _opt in self.steps}
+
+        self._node_items: dict[str, dict[str, int]] = {}
+        self._arrow_items: list[int] = []
+
+        self.canvas.bind("<Configure>", lambda _e: self._redraw())
+        self._redraw()
+
+    def reset(self) -> None:
+        for k, _t, _opt in self.steps:
+            self._state[k] = "idle"
+        self.set_case("")
+        self._apply_colors()
+
+    def set_case(self, name: str) -> None:
+        name = (name or "").strip()
+        self.case_var.set(f"Running: {name}" if name else "")
+
+    def set_step_state(self, step_key: str, state: str) -> None:
+        if step_key not in self._state:
+            return
+        if state not in {"idle", "running", "success", "failed", "skipped"}:
+            return
+        self._state[step_key] = state
+        self._apply_colors()
+
+    def _colors_for(self, step_key: str) -> tuple[str, str, str]:
+        # (fill, outline, text)
+        state = self._state.get(step_key, "idle")
+        if state == "idle":
+            return ("#f2f4f7", "#c8d0da", "#1f2937")
+        if state == "skipped":
+            return ("#f8fafc", "#cbd5e1", "#6b7280")
+        if state == "running":
+            return ("#fff3cd", "#f0ad4e", "#7a4b00")
+        if state == "success":
+            return ("#d1fae5", "#10b981", "#065f46")
+        if state == "failed":
+            return ("#fee2e2", "#ef4444", "#7f1d1d")
+        return ("#f2f4f7", "#c8d0da", "#1f2937")
+
+    def _redraw(self) -> None:
+        self.canvas.delete("all")
+        self._node_items.clear()
+        self._arrow_items.clear()
+
+        w = max(900, int(self.canvas.winfo_width() or 0))
+        h = int(self.canvas.winfo_height() or 110)
+
+        padding_x = 18
+        top = 34
+        node_h = 52
+        gap = 18
+
+        n = len(self.steps)
+        node_w = int((w - padding_x * 2 - gap * (n - 1)) / n)
+        node_w = max(140, min(230, node_w))
+
+        # Center horizontally with fixed node_w and gap.
+        total_w = n * node_w + (n - 1) * gap
+        start_x = int((w - total_w) / 2)
+
+        # Arrows + nodes
+        for i, (step_key, title, is_optional) in enumerate(self.steps):
+            x0 = start_x + i * (node_w + gap)
+            y0 = top
+            x1 = x0 + node_w
+            y1 = y0 + node_h
+
+            fill, outline, text_color = self._colors_for(step_key)
+            width = 2 if self._state.get(step_key) in {"running", "failed"} else 1
+
+            rect = self.canvas.create_rectangle(x0, y0, x1, y1, fill=fill, outline=outline, width=width)
+            if is_optional:
+                # Dashed outline effect: draw an extra dashed rectangle on top.
+                self.canvas.create_rectangle(x0, y0, x1, y1, fill="", outline=outline, width=2, dash=(5, 3))
+
+            label = self.canvas.create_text(
+                int((x0 + x1) / 2),
+                int((y0 + y1) / 2) - 6,
+                text=title,
+                fill=text_color,
+                font=("Segoe UI", 10, "bold") if is_windows() else ("TkDefaultFont", 10, "bold"),
+            )
+
+            sub = self.canvas.create_text(
+                int((x0 + x1) / 2),
+                int((y0 + y1) / 2) + 14,
+                text=self._state.get(step_key, "idle").upper(),
+                fill=text_color,
+                font=("Segoe UI", 9) if is_windows() else ("TkDefaultFont", 9),
+            )
+
+            self._node_items[step_key] = {"rect": rect, "label": label, "sub": sub}
+
+            if i < n - 1:
+                ax0 = x1 + 4
+                ay = int((y0 + y1) / 2)
+                ax1 = x1 + gap - 4
+                arr = self.canvas.create_line(
+                    ax0,
+                    ay,
+                    ax1,
+                    ay,
+                    arrow=tk.LAST,
+                    fill="#9aa4b2",
+                    width=2,
+                )
+                self._arrow_items.append(arr)
+
+        # Light baseline bar (visual cohesion)
+        self.canvas.create_line(padding_x, top + node_h + 14, w - padding_x, top + node_h + 14, fill="#e5e7eb")
+
+    def _apply_colors(self) -> None:
+        for step_key, items in self._node_items.items():
+            fill, outline, text_color = self._colors_for(step_key)
+            width = 2 if self._state.get(step_key) in {"running", "failed"} else 1
+            self.canvas.itemconfig(items["rect"], fill=fill, outline=outline, width=width)
+            self.canvas.itemconfig(items["label"], fill=text_color)
+            self.canvas.itemconfig(items["sub"], fill=text_color, text=self._state.get(step_key, "idle").upper())
+
+
 def now_unix_ms() -> int:
     return int(time.time() * 1000)
 
@@ -98,7 +244,7 @@ class ProcessRunner:
         except Exception:
             pass
 
-    def run_async(self, spec: RunSpec) -> None:
+    def run_async(self, spec: RunSpec, on_exit: Optional[Callable[[int], None]] = None) -> None:
         if self.is_running():
             raise RuntimeError("A process is already running. Cancel it first.")
 
@@ -138,6 +284,12 @@ class ProcessRunner:
                 with self._lock:
                     self._proc = None
                 self._on_state(f"Exited with code {rc}")
+                if on_exit is not None and rc is not None:
+                    try:
+                        on_exit(int(rc))
+                    except Exception:
+                        # Never let callback errors crash the runner thread.
+                        pass
 
         threading.Thread(target=_target, daemon=True).start()
 
@@ -148,6 +300,9 @@ class App(ttk.Frame):
         self.master = master
 
         self.q: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        self._step_sequence: list[dict[str, object]] = []
+        self._step_sequence_idx: int = 0
+        self._sequence_active: bool = False
 
         self.status_var = tk.StringVar(value="Idle")
         self.use_wsl_var = tk.BooleanVar(value=True if is_windows() else False)
@@ -238,6 +393,12 @@ class App(ttk.Frame):
         )
         ttk.Button(right, text="Open inputs/", command=lambda: self._safe_open(self.inputs_dir)).pack(fill="x", pady=(6, 0))
         ttk.Button(right, text="Open logs/", command=lambda: self._safe_open(self.logs_dir)).pack(fill="x", pady=(6, 0))
+
+        # Global, persistent flowchart visualization (always visible regardless of tab).
+        flow_wrap = ttk.Frame(self)
+        flow_wrap.pack(fill="x", padx=12, pady=(0, 6))
+        self.flowchart = WorkflowFlowchart(flow_wrap)
+        self.flowchart.pack(fill="x")
 
         mid = ttk.Panedwindow(self, orient="horizontal")
         mid.pack(fill="both", expand=True, padx=12, pady=6)
@@ -482,60 +643,105 @@ class App(ttk.Frame):
         )
         ttk.Button(btns, text="Open .tmp_full_test_runs/", command=self._open_validation_runs).pack(side="left")
 
-        # --- Visualization ---
-        viz = ttk.LabelFrame(f, text="Workflow visualization")
-        viz.grid(row=3, column=0, sticky="we", padx=10, pady=(0, 10))
-        viz.columnconfigure(1, weight=1)
-
-        self.execution_case_var = tk.StringVar(value="Case: (none)")
-        ttk.Label(viz, textvariable=self.execution_case_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=8)
-
-        steps_grid = ttk.Frame(viz)
-        steps_grid.grid(row=1, column=0, columnspan=3, sticky="we", padx=10, pady=(0, 10))
-        steps_grid.columnconfigure(1, weight=1)
-
-        step_titles: list[tuple[str, str]] = [
-            ("providers", "Provider(s)"),
-            ("ack", "ACK generation"),
-            ("consensus", "Consensus"),
-            ("bridge", "Optional bridge"),
-            ("mp_spdz", "Optional MP-SPDZ"),
-        ]
-
-        self.exec_step_label_widgets: dict[str, tk.Label] = {}
-        for i, (step_key, step_title) in enumerate(step_titles):
-            ttk.Label(steps_grid, text=step_title).grid(row=i, column=0, sticky="w", pady=4)
-            lbl = tk.Label(steps_grid, text="Idle", width=14, anchor="w", bg="#d9d9d9", fg="#111111")
-            lbl.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=4)
-            self.exec_step_label_widgets[step_key] = lbl
-
-        self._execution_reset_steps()
-
         ttk.Label(
             f,
-            text="Backend emits `GUI_CASE:` and `GUI_STEP:<step>:<state>` markers; visualization updates live.",
-        ).grid(row=4, column=0, sticky="w", padx=10, pady=(0, 6))
+            text="Tip: the global flowchart above updates live during execution.",
+        ).grid(row=3, column=0, sticky="w", padx=10, pady=(0, 6))
 
-    def _execution_reset_steps(self) -> None:
-        for step_key in getattr(self, "exec_step_label_widgets", {}):
-            self._set_step_state(step_key, "idle")
+    def _flow_reset(self) -> None:
+        self.flowchart.reset()
 
-    def _set_step_state(self, step_key: str, state: str) -> None:
-        if step_key not in getattr(self, "exec_step_label_widgets", {}):
+    def _flow_case(self, name: str) -> None:
+        self.flowchart.set_case(name)
+
+    def _flow_step(self, step_key: str, state: str) -> None:
+        self.flowchart.set_step_state(step_key, state)
+
+    def _flow_steps(self, step_keys: Iterable[str], state: str) -> None:
+        for k in step_keys:
+            self._flow_step(k, state)
+
+    def _run_shelllike_with_flow(
+        self,
+        title: str,
+        command: str,
+        flow_keys: list[str],
+        case_name: Optional[str] = None,
+    ) -> None:
+        """
+        Run one shell-like command and drive the flowchart directly (no markers required).
+        """
+        if self.runner.is_running():
+            messagebox.showwarning("Busy", "A process is already running. Cancel it first.")
             return
 
-        colors = {
-            "idle": ("Idle", "#d9d9d9", "#111111"),
-            "running": ("Running…", "#f0ad4e", "#111111"),
-            "success": ("Success", "#5cb85c", "white"),
-            "failed": ("Failed", "#d9534f", "white"),
-        }
-        text, bg, fg = colors.get(state, colors["idle"])
-        self.exec_step_label_widgets[step_key].config(text=text, bg=bg, fg=fg)
+        if case_name:
+            self._flow_reset()
+            self._flow_case(case_name)
+
+        self._flow_steps(flow_keys, "running")
+
+        def _on_exit(rc: int) -> None:
+            self.q.put(("flow_exit", json.dumps({"rc": rc, "flow_keys": flow_keys})))
+
+        if self.use_wsl_var.get():
+            argv = wsl_bash_command(REPO_ROOT, command)
+        else:
+            argv = ["bash", "-lc", f"cd {shlex.quote(str(REPO_ROOT))} && {command}"]
+
+        spec = RunSpec(title=title, argv=argv, cwd=REPO_ROOT)
+        self.runner.run_async(spec, on_exit=_on_exit)
+
+    def _start_step_sequence(self, case_name: str, steps: list[dict[str, object]]) -> None:
+        """
+        Start a GUI-driven step sequence. Each step is a dict:
+          { "title": str, "command": str, "flow_keys": list[str], "enabled": bool }
+        """
+        if self.runner.is_running() or self._sequence_active:
+            messagebox.showwarning("Busy", "A process is already running. Cancel it first.")
+            return
+        self._sequence_active = True
+        self._step_sequence = steps
+        self._step_sequence_idx = 0
+        self._flow_reset()
+        self._flow_case(case_name)
+        self._run_next_sequence_step()
+
+    def _run_next_sequence_step(self) -> None:
+        if not self._sequence_active:
+            return
+        if self._step_sequence_idx >= len(self._step_sequence):
+            self._sequence_active = False
+            return
+
+        step = self._step_sequence[self._step_sequence_idx]
+        title = str(step["title"])
+        command = str(step["command"])
+        flow_keys = list(step.get("flow_keys", []))  # type: ignore[arg-type]
+        enabled = bool(step.get("enabled", True))
+
+        if not enabled:
+            self._flow_steps(flow_keys, "skipped")
+            self._step_sequence_idx += 1
+            self._run_next_sequence_step()
+            return
+
+        self._flow_steps(flow_keys, "running")
+
+        def _on_exit(rc: int) -> None:
+            self.q.put(("seq_exit", json.dumps({"rc": rc, "flow_keys": flow_keys})))
+
+        # Sequence steps are always shell-like (single process per step).
+        if self.use_wsl_var.get():
+            argv = wsl_bash_command(REPO_ROOT, command)
+        else:
+            argv = ["bash", "-lc", f"cd {shlex.quote(str(REPO_ROOT))} && {command}"]
+        spec = RunSpec(title=title, argv=argv, cwd=REPO_ROOT)
+        self.runner.run_async(spec, on_exit=_on_exit)
 
     def _handle_gui_markers(self, line: str) -> bool:
         """
-        Parses backend markers to drive the workflow visualization.
+        Parses backend markers to drive the global flowchart visualization.
 
         Markers:
           - `GUI_CASE:<name>`
@@ -547,8 +753,9 @@ class App(ttk.Frame):
 
         if s.startswith("GUI_CASE:"):
             case_name = s[len("GUI_CASE:") :].strip()
-            self.execution_case_var.set(f"Case: {case_name}" if case_name else "Case: (none)")
-            self._execution_reset_steps()
+            self._flow_case(case_name)
+            self._flow_reset()
+            self._flow_case(case_name)
             return True
 
         if s.startswith("GUI_STEP:"):
@@ -558,9 +765,9 @@ class App(ttk.Frame):
                 step_key = parts[0].strip()
                 step_state = parts[1].strip()
                 if step_state == "start":
-                    self._set_step_state(step_key, "running")
+                    self._flow_step(step_key, "running")
                 elif step_state in {"success", "failed"}:
-                    self._set_step_state(step_key, step_state)
+                    self._flow_step(step_key, step_state)
                 return True
 
         return False
@@ -607,6 +814,21 @@ class App(ttk.Frame):
                         self._log_append(payload)
                 elif kind == "state":
                     self.status_var.set(payload)
+                elif kind == "flow_exit":
+                    d = json.loads(payload)
+                    rc = int(d.get("rc", 1))
+                    flow_keys = list(d.get("flow_keys", []))
+                    self._flow_steps(flow_keys, "success" if rc == 0 else "failed")
+                elif kind == "seq_exit":
+                    d = json.loads(payload)
+                    rc = int(d.get("rc", 1))
+                    flow_keys = list(d.get("flow_keys", []))
+                    self._flow_steps(flow_keys, "success" if rc == 0 else "failed")
+                    if rc != 0:
+                        self._sequence_active = False
+                    else:
+                        self._step_sequence_idx += 1
+                        self._run_next_sequence_step()
                 else:
                     self._log_append(payload)
         except queue.Empty:
@@ -788,7 +1010,7 @@ class App(ttk.Frame):
         for pid, val in providers:
             parts.append(f'./build/node/data_provider {pid} {val} --computation-nodes {n}')
         cmd = self._ensure_configured_prefix() + " && ".join(parts)
-        self._run_shelllike("Run provider(s)", cmd)
+        self._run_shelllike_with_flow("Run provider(s)", cmd, flow_keys=["providers"], case_name="Manual: providers")
 
     def _gen_cn_keys(self) -> None:
         cn_dir = (REPO_ROOT / Path(self.cn_keys_dir_var.get())).resolve()
@@ -803,7 +1025,7 @@ class App(ttk.Frame):
                 f'./build/consensus/ack_crypto_tool gen-keypair {self._bash_path(pub)} {self._bash_path(sec)}'
             )
         cmd = self._ensure_configured_prefix() + " && ".join(parts)
-        self._run_shelllike("Generate CN keypairs", cmd)
+        self._run_shelllike_with_flow("Generate CN keypairs", cmd, flow_keys=["ack"], case_name="Manual: ACK prep")
 
     def _gen_acks(self) -> None:
         providers = self._parse_providers()
@@ -844,7 +1066,12 @@ class App(ttk.Frame):
                     )
                 )
         cmd = self._ensure_configured_prefix() + " && ".join(parts)
-        self._run_shelllike("Generate ACKs (share_verifier)", cmd)
+        self._run_shelllike_with_flow(
+            "Generate ACKs (share_verifier)",
+            cmd,
+            flow_keys=["ack"],
+            case_name="Manual: ACK generation",
+        )
 
     def _run_consensus(self) -> None:
         acks_dir = (REPO_ROOT / Path(self.acks_dir_var.get())).resolve()
@@ -879,7 +1106,12 @@ class App(ttk.Frame):
                 f"--schema-id {shlex.quote(schema)}",
             ]
         )
-        self._run_shelllike("Consensus (ACK mandatory)", cmd)
+        self._run_shelllike_with_flow(
+            "Consensus (ACK mandatory)",
+            cmd,
+            flow_keys=["consensus"],
+            case_name="Manual: consensus",
+        )
 
     def _browse_program(self) -> None:
         p = filedialog.askopenfilename(
@@ -902,7 +1134,12 @@ class App(ttk.Frame):
             )
         else:
             cmd = self._ensure_configured_prefix() + f"./build/spdz_bridge/spdz_bridge --computation-nodes {n}"
-        self._run_shelllike("spdz_bridge (optional)", cmd)
+        self._run_shelllike_with_flow(
+            "spdz_bridge (optional)",
+            cmd,
+            flow_keys=["bridge", "mp_spdz"],
+            case_name="Manual: bridge / MP-SPDZ",
+        )
 
     # ---------- Full-cycle ----------
     def _run_full_cycle(self) -> None:
@@ -910,7 +1147,7 @@ class App(ttk.Frame):
             messagebox.showwarning("Busy", "A process is already running. Cancel it first.")
             return
 
-        # Run sequentially with one bash command so the user gets one coherent log stream.
+        # Run as explicit GUI-tracked steps so the global flowchart can update stage-by-stage.
         providers = self._parse_providers()
         n = int(self.computation_nodes_var.get())
         sess = self.session_id_var.get().strip()
@@ -927,24 +1164,25 @@ class App(ttk.Frame):
         artifacts_dir_bash = self._bash_path(self.artifacts_dir)
         ensure_dirs(self.inputs_dir, self.logs_dir, self.artifacts_dir, self.provider_secrets_dir)
 
-        steps: list[str] = []
+        # Step 1: providers
+        provider_cmds: list[str] = []
         if self.auto_configure_build_var.get():
-            steps.append("([ -f build/CMakeCache.txt ] || cmake -S . -B build)")
+            provider_cmds.append("([ -f build/CMakeCache.txt ] || cmake -S . -B build)")
         for pid, val in providers:
-            steps.append(f'./build/node/data_provider {pid} {val} --computation-nodes {n}')
+            provider_cmds.append(f'./build/node/data_provider {pid} {val} --computation-nodes {n}')
 
-        steps.append(f"rm -rf {cn_keys_dir_bash} {acks_dir_bash} || true")
-        steps.append(f"mkdir -p {cn_keys_dir_bash} {acks_dir_bash}")
+        # Step 2: CN keys
+        cn_steps: list[str] = [f"rm -rf {cn_keys_dir_bash} || true", f"mkdir -p {cn_keys_dir_bash}"]
         for cn_id in range(n):
             pub = cn_keys_dir / f"cn_{cn_id}.pub.hex"
             sec = cn_keys_dir / f"cn_{cn_id}.sec.hex"
-            steps.append(
-                f"./build/consensus/ack_crypto_tool gen-keypair {self._bash_path(pub)} {self._bash_path(sec)}"
-            )
+            cn_steps.append(f"./build/consensus/ack_crypto_tool gen-keypair {self._bash_path(pub)} {self._bash_path(sec)}")
 
+        # Step 3: ACK generation
+        ack_steps: list[str] = [f"rm -rf {acks_dir_bash} || true", f"mkdir -p {acks_dir_bash}"]
         for pid, _val in providers:
             for party in range(n):
-                steps.append(
+                ack_steps.append(
                     " ".join(
                         [
                             "./build/consensus/share_verifier",
@@ -963,34 +1201,42 @@ class App(ttk.Frame):
                     )
                 )
 
-        steps.append(
-            " ".join(
-                [
-                    "./build/consensus/consensus",
-                    str(min_inputs),
-                    f"--acks-dir {acks_dir_bash}",
-                    f"--num-parties {n}",
-                    f"--session-id {shlex.quote(sess)}",
-                    f"--round-id {rid}",
-                    f"--timeout-seconds {timeout_s}",
-                    f"--artifacts-dir {artifacts_dir_bash}",
-                    f"--cn-keys-dir {cn_keys_dir_bash}",
-                    f"--protocol-version {shlex.quote(proto)}",
-                    f"--schema-id {shlex.quote(schema)}",
-                ]
-            )
+        # Step 4: consensus
+        consensus_cmd = " ".join(
+            [
+                "./build/consensus/consensus",
+                str(min_inputs),
+                f"--acks-dir {acks_dir_bash}",
+                f"--num-parties {n}",
+                f"--session-id {shlex.quote(sess)}",
+                f"--round-id {rid}",
+                f"--timeout-seconds {timeout_s}",
+                f"--artifacts-dir {artifacts_dir_bash}",
+                f"--cn-keys-dir {cn_keys_dir_bash}",
+                f"--protocol-version {shlex.quote(proto)}",
+                f"--schema-id {shlex.quote(schema)}",
+            ]
         )
 
-        if self.enable_bridge_var.get():
-            program = self.program_path_var.get().strip()
-            if program:
-                steps.append(
-                    f"./build/spdz_bridge/spdz_bridge --computation-nodes {n} {self._bash_user_path(program)}"
-                )
-            else:
-                steps.append(f"./build/spdz_bridge/spdz_bridge --computation-nodes {n}")
+        bridge_enabled = bool(self.enable_bridge_var.get())
+        program = self.program_path_var.get().strip()
+        if program:
+            bridge_cmd = f"./build/spdz_bridge/spdz_bridge --computation-nodes {n} {self._bash_user_path(program)}"
+        else:
+            bridge_cmd = f"./build/spdz_bridge/spdz_bridge --computation-nodes {n}"
 
-        self._run_shelllike("Full-cycle workflow", " && ".join(steps))
+        seq: list[dict[str, object]] = [
+            {"title": "Full-cycle: providers", "command": " && ".join(provider_cmds), "flow_keys": ["providers"], "enabled": True},
+            {"title": "Full-cycle: CN keys", "command": " && ".join(cn_steps), "flow_keys": ["ack"], "enabled": True},
+            {"title": "Full-cycle: ACK generation", "command": " && ".join(ack_steps), "flow_keys": ["ack"], "enabled": True},
+            {"title": "Full-cycle: consensus", "command": self._ensure_configured_prefix() + consensus_cmd, "flow_keys": ["consensus"], "enabled": True},
+            {"title": "Full-cycle: bridge / MP-SPDZ", "command": self._ensure_configured_prefix() + bridge_cmd, "flow_keys": ["bridge", "mp_spdz"], "enabled": bridge_enabled},
+        ]
+        if not bridge_enabled:
+            # Show intentional non-execution as skipped.
+            self._flow_steps(["bridge", "mp_spdz"], "skipped")
+
+        self._start_step_sequence("Full-cycle workflow", seq)
 
     # ---------- Validation ----------
     def _run_full_validation(self) -> None:
@@ -1010,8 +1256,7 @@ class App(ttk.Frame):
             return
 
         only_key = self.execution_targets[choice]
-        self.execution_case_var.set("Case: (none)")
-        self._execution_reset_steps()
+        self._flow_reset()
 
         if only_key is None:
             self._run_validation_target(None)
@@ -1030,7 +1275,9 @@ class App(ttk.Frame):
         # Only force WSL on Windows; when running inside WSL/Linux there is no `wsl` executable.
         if is_windows():
             self.use_wsl_var.set(True)
-        self._execution_reset_steps()
+        # Reset flowchart; validation scripts will additionally drive states via GUI_STEP markers.
+        self._flow_reset()
+        self._flow_case(f"validation{': ' + only_key if only_key else ''}")
 
         if only_key:
             title = f"Validation: {only_key}"
