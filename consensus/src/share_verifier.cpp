@@ -61,7 +61,7 @@ static std::string trim_ascii_ws(const std::string& s) {
     return s.substr(begin, end - begin);
 }
 
-static std::optional<std::string> read_text_file_one_line(const fs::path& path) {
+[[maybe_unused]] static std::optional<std::string> read_text_file_one_line(const fs::path& path) {
     std::ifstream in(path);
     if (!in.is_open()) return std::nullopt;
     std::string line;

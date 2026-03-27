@@ -78,7 +78,7 @@ Deliverable:
 
 ## Short-Term Next Actions
 
-1. Use `scripts/async_orchestrator.py` for all demos.
+1. Use direct binaries (or the GUI) for all demos: `data_provider → share_verifier → consensus (ACK mandatory) → optional spdz_bridge`.
 2. Start storing ACK artifacts under `artifacts/acks/`.
 3. Extend consensus to read ACKs and write JSON decision artifacts.
 4. Add one scripted crash scenario for compute rerun demonstration.

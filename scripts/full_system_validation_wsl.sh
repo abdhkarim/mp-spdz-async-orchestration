@@ -3,7 +3,7 @@
 #
 # Full-coverage integration test for the async MPC orchestration system.
 # Covers:
-#   1) ACK / asynchrony attack scenarios (5 scenarios via async_orchestrator.py)
+#   1) ACK / asynchrony attack scenarios (5 scenarios, generated directly)
 #   2) Provider tampering detection (BLAKE2b proof mismatch)
 #   3) Late-provider asynchrony (provider arrives after consensus decided)
 #   4) Masking confidentiality check (bridge file contains no plain values)
@@ -83,33 +83,196 @@ clean_workspace() {
 log "Building all binaries"
 cmake --build build -j4 --target data_provider consensus ack_crypto_tool share_verifier spdz_bridge
 
+# Default protocol/schema identifiers used when earlier sections don't override them.
+# (ACK mode requires these to match between `share_verifier` and `consensus`.)
+CONSENSUS_BIN="./build/consensus/consensus"
+SHARE_VERIFIER_BIN="./build/consensus/share_verifier"
+ACK_CRYPTO_TOOL_BIN="./build/consensus/ack_crypto_tool"
+PROTOCOL_VERSION="1"
+SCHEMA_ID="semi2k-wire-v1"
+
+# ACK-verified consensus helper.
+# Generates CN keys + provider share ACKs (via `share_verifier`) and then runs `consensus --acks-dir`.
+run_ack_verified_consensus() {
+  local outfile="$1"
+  local case_dir="$2"
+  local min_inputs="$3"
+  local session_id="$4"
+  local round_id="$5"
+  shift 5
+
+  local providers=("$@")
+  local acks_dir="${case_dir}/acks"
+  local cn_keys_dir="${case_dir}/cn_keys"
+  local artifacts_dir="${case_dir}/artifacts"
+  mkdir -p "${acks_dir}" "${cn_keys_dir}" "${artifacts_dir}"
+
+  # Prepare per-party verifier ACK keys.
+  for cn_id in $(seq 0 $((COMPUTATION_NODES - 1))); do
+    run_cmd "${case_dir}/cn_key_${cn_id}.log" \
+      "${ACK_CRYPTO_TOOL_BIN}" gen-keypair \
+      "${cn_keys_dir}/cn_${cn_id}.pub.hex" \
+      "${cn_keys_dir}/cn_${cn_id}.sec.hex"
+  done
+
+  # Create local share ACKs (distributed verifiers).
+  for provider_id in "${providers[@]}"; do
+    for party_index in $(seq 0 $((COMPUTATION_NODES - 1))); do
+      # Some scenarios intentionally tamper with provider evidence; share_verifier may refuse
+      # to emit ACKs for that provider. That's expected; we keep going so consensus can reject.
+      (
+        set +e
+        run_cmd "${case_dir}/share_ack_provider_${provider_id}_p${party_index}.log" \
+          "${SHARE_VERIFIER_BIN}" \
+            --session-id "${session_id}" \
+            --round-id "${round_id}" \
+            --protocol-version "${PROTOCOL_VERSION}" \
+            --schema-id "${SCHEMA_ID}" \
+            --provider-id "${provider_id}" \
+            --party-index "${party_index}" \
+            --inputs-dir "${REPO_ROOT}/inputs" \
+            --provider-secrets-dir "${REPO_ROOT}/provider_secrets" \
+            --share-manifest-path "${REPO_ROOT}/inputs/provider_${provider_id}_manifest.json" \
+            --cn-keys-dir "${cn_keys_dir}" \
+            --acks-out-dir "${acks_dir}"
+        exit 0
+      )
+    done
+  done
+
+  # Run consensus admission (ACK mode).
+  (
+    set +e
+    run_cmd "${outfile}" \
+      "${CONSENSUS_BIN}" "${min_inputs}" \
+        --acks-dir "${acks_dir}" \
+        --num-parties "${COMPUTATION_NODES}" \
+        --session-id "${session_id}" \
+        --round-id "${round_id}" \
+        --timeout-seconds 0 \
+        --artifacts-dir "${artifacts_dir}" \
+        --cn-keys-dir "${cn_keys_dir}" \
+        --schema-id "${SCHEMA_ID}" \
+        --protocol-version "${PROTOCOL_VERSION}"
+    exit $?
+  )
+  return $?
+}
+
 # ─── Section 1: ACK / asynchrony attack scenarios ───────────────────────────
 
-log "1) ACK / asynchrony attack scenarios"
+log "1) ACK / asynchrony attack scenarios (no orchestrator)"
 
-SCENARIOS=(
-  "normal:ok"
-  "insufficient-acks:fail"
-  "replay-ack:ok"
-  "tampered-ack:fail"
-  "stale-ack:fail"
+run_ack_attack_scenario() {
+  local scenario="$1"     # normal|insufficient-acks|replay-ack|tampered-ack|stale-ack
+  local expected="$2"     # ok|fail
+
+  clean_workspace
+
+  COMPUTATION_NODES=3
+  PROTOCOL_VERSION="1"
+  SCHEMA_ID="semi2k-wire-v1"
+  SESSION_ID="full-${scenario}"
+  ROUND_ID=1
+
+  # Providers and values.
+  run_cmd "${TMP_DIR}/scenario_${scenario}_p1.log" ./build/node/data_provider 1 10 --computation-nodes 3
+  run_cmd "${TMP_DIR}/scenario_${scenario}_p2.log" ./build/node/data_provider 2 20 --computation-nodes 3
+  run_cmd "${TMP_DIR}/scenario_${scenario}_p3.log" ./build/node/data_provider 3 30 --computation-nodes 3
+  run_cmd "${TMP_DIR}/scenario_${scenario}_p4.log" ./build/node/data_provider 4 40 --computation-nodes 3
+  run_cmd "${TMP_DIR}/scenario_${scenario}_p5.log" ./build/node/data_provider 5 50 --computation-nodes 3
+
+  local case_dir="${TMP_DIR}/scenario_${scenario}"
+  local acks_dir="${case_dir}/acks"
+  local cn_keys_dir="${case_dir}/cn_keys"
+  local artifacts_dir="${case_dir}/artifacts"
+  mkdir -p "${acks_dir}" "${cn_keys_dir}" "${artifacts_dir}"
+
+  # CN keypairs.
+  for cn_id in $(seq 0 $((COMPUTATION_NODES - 1))); do
+    run_cmd "${case_dir}/cn_key_${cn_id}.log" \
+      "${ACK_CRYPTO_TOOL_BIN}" gen-keypair \
+      "${cn_keys_dir}/cn_${cn_id}.pub.hex" \
+      "${cn_keys_dir}/cn_${cn_id}.sec.hex"
+  done
+
+  # Deterministic timestamps for stale-ack.
+  now_ms=$(python3 - <<'PY'
+import time
+print(int(time.time() * 1000))
+PY
 )
+  ts_ok="${now_ms}"
+  ts_stale=$((now_ms - 1000 * 10))
 
-for item in "${SCENARIOS[@]}"; do
-  scenario="${item%%:*}"
-  expected="${item##*:}"
-  out="${TMP_DIR}/scenario_${scenario}.log"
+  # ACK generation per provider / party.
+  for provider_id in 1 2 3 4 5; do
+    for party_index in 0 1 2; do
+      # insufficient-acks: drop party 2 for provider 5 (coverage incomplete).
+      if [[ "${scenario}" == "insufficient-acks" && "${provider_id}" == "5" && "${party_index}" == "2" ]]; then
+        continue
+      fi
+      ts="${ts_ok}"
+      if [[ "${scenario}" == "stale-ack" && "${provider_id}" == "5" && "${party_index}" == "0" ]]; then
+        ts="${ts_stale}"
+      fi
+      (
+        set +e
+        run_cmd "${case_dir}/share_ack_p${provider_id}_party${party_index}.log" \
+          "${SHARE_VERIFIER_BIN}" \
+            --session-id "${SESSION_ID}" \
+            --round-id "${ROUND_ID}" \
+            --protocol-version "${PROTOCOL_VERSION}" \
+            --schema-id "${SCHEMA_ID}" \
+            --provider-id "${provider_id}" \
+            --party-index "${party_index}" \
+            --inputs-dir "${REPO_ROOT}/inputs" \
+            --provider-secrets-dir "${REPO_ROOT}/provider_secrets" \
+            --share-manifest-path "${REPO_ROOT}/inputs/provider_${provider_id}_manifest.json" \
+            --cn-keys-dir "${cn_keys_dir}" \
+            --acks-out-dir "${acks_dir}" \
+            --timestamp-unix-ms "${ts}"
+        exit 0
+      )
+    done
+  done
+
+  # replay-ack: duplicate a provider+party ACK under a different filename.
+  if [[ "${scenario}" == "replay-ack" ]]; then
+    cp -f "${acks_dir}/ack_p5_party0.json" "${acks_dir}/ack_p5_party0_replay.json" || true
+  fi
+
+  # tampered-ack: mutate one ACK after signing (signature must fail).
+  if [[ "${scenario}" == "tampered-ack" ]]; then
+    python3 - <<PY
+import json
+from pathlib import Path
+p = Path("${acks_dir}") / "ack_p5_party0.json"
+if p.exists():
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["share_file_digest"] = "0" * 64
+    p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+PY
+  fi
+
+  # Run consensus (ACK mandatory). Timeout enabled only for stale-ack.
+  timeout_s=0
+  if [[ "${scenario}" == "stale-ack" ]]; then
+    timeout_s=2
+  fi
 
   set +e
-  run_cmd "${out}" python3 scripts/async_orchestrator.py \
-    --clean \
-    --session-id "full-${scenario}" \
-    --round-id 1 \
-    --providers 1:10,2:20,3:30,4:40,5:50 \
-    --computation-nodes 3 \
-    --ack-timeout-seconds 2 \
-    --skip-bridge \
-    --scenario "${scenario}"
+  run_cmd "${TMP_DIR}/scenario_${scenario}.log" \
+    "${CONSENSUS_BIN}" 5 \
+      --acks-dir "${acks_dir}" \
+      --num-parties "${COMPUTATION_NODES}" \
+      --session-id "${SESSION_ID}" \
+      --round-id "${ROUND_ID}" \
+      --timeout-seconds "${timeout_s}" \
+      --artifacts-dir "${artifacts_dir}" \
+      --cn-keys-dir "${cn_keys_dir}" \
+      --schema-id "${SCHEMA_ID}" \
+      --protocol-version "${PROTOCOL_VERSION}"
   rc=$?
   set -e
 
@@ -123,6 +286,20 @@ for item in "${SCENARIOS[@]}"; do
     append_summary "scenario:${scenario}" "FAIL" "unexpected exit code ${rc}"
     mark_fail
   fi
+}
+
+SCENARIOS=(
+  "normal:ok"
+  "insufficient-acks:fail"
+  "replay-ack:ok"
+  "tampered-ack:fail"
+  "stale-ack:fail"
+)
+
+for item in "${SCENARIOS[@]}"; do
+  scenario="${item%%:*}"
+  expected="${item##*:}"
+  run_ack_attack_scenario "${scenario}" "${expected}"
 done
 
 # ─── Section 2: Provider tampering detection ────────────────────────────────
@@ -146,12 +323,26 @@ for i, line in enumerate(lines):
 p.write_text("\n".join(lines) + "\n")
 PY
 
+COMPUTATION_NODES=3
+SESSION_ID="tampering"
+ROUND_ID=1
 set +e
-run_cmd "${TMP_DIR}/tamper_consensus.log" ./build/consensus/consensus 3
+run_ack_verified_consensus "${TMP_DIR}/tamper_consensus.log" "${TMP_DIR}/tamper_ack_case" 3 "${SESSION_ID}" "${ROUND_ID}" 1 2 3
 tamper_rc=$?
 set -e
 
-if [[ ${tamper_rc} -ne 0 ]] && assert_contains "invalid cryptographic proof" "${TMP_DIR}/tamper_consensus.log"; then
+tamper_ok=false
+if [[ ${tamper_rc} -ne 0 ]]; then
+  set +e
+  assert_contains "invalid cryptographic proof" "${TMP_DIR}/tamper_consensus.log"
+  contains_rc=$?
+  set -e
+  if [[ ${contains_rc} -eq 0 ]]; then
+    tamper_ok=true
+  fi
+fi
+
+if [[ "${tamper_ok}" == "true" ]]; then
   append_summary "tampering:provider-file" "PASS" "proof mismatch rejected by consensus"
   mark_pass
 else
@@ -167,7 +358,10 @@ clean_workspace
 run_cmd "${TMP_DIR}/late_p1.log" ./build/node/data_provider 1 5 --computation-nodes 3
 run_cmd "${TMP_DIR}/late_p2.log" ./build/node/data_provider 2 6 --computation-nodes 3
 # Consensus decides with just 2 providers (quorum met).
-run_cmd "${TMP_DIR}/late_consensus.log" ./build/consensus/consensus 2
+COMPUTATION_NODES=3
+SESSION_ID="late-provider"
+ROUND_ID=1
+run_ack_verified_consensus "${TMP_DIR}/late_consensus.log" "${TMP_DIR}/late_ack_case" 2 "${SESSION_ID}" "${ROUND_ID}" 1 2
 # Provider 3 arrives after consensus — must NOT appear in core_set.txt.
 run_cmd "${TMP_DIR}/late_p3.log" ./build/node/data_provider 3 7 --computation-nodes 3
 
@@ -191,7 +385,10 @@ export MPC_PROVIDER_SECRET="${MPC_PROVIDER_SECRET:-mpc-demo-secret}"
 run_cmd "${TMP_DIR}/conf_p1.log" ./build/node/data_provider 1 42 --computation-nodes 3
 run_cmd "${TMP_DIR}/conf_p2.log" ./build/node/data_provider 2 42 --computation-nodes 3
 run_cmd "${TMP_DIR}/conf_p3.log" ./build/node/data_provider 3 42 --computation-nodes 3
-run_cmd "${TMP_DIR}/conf_consensus.log" ./build/consensus/consensus 3
+COMPUTATION_NODES=3
+SESSION_ID="confidentiality"
+ROUND_ID=1
+run_ack_verified_consensus "${TMP_DIR}/conf_consensus.log" "${TMP_DIR}/conf_ack_case" 3 "${SESSION_ID}" "${ROUND_ID}" 1 2 3
 
 # Check: none of the provider input files contain "masked_value=42" (the plain value).
 # If masking worked, the stored value must differ from 42.
@@ -237,7 +434,12 @@ for prog in "${MPC_PROGRAMS[@]}"; do
   run_cmd "${TMP_DIR}/prog_${prog}_p1.log" ./build/node/data_provider 1 7 --computation-nodes 3
   run_cmd "${TMP_DIR}/prog_${prog}_p2.log" ./build/node/data_provider 2 15 --computation-nodes 3
   run_cmd "${TMP_DIR}/prog_${prog}_p3.log" ./build/node/data_provider 3 20 --computation-nodes 3
-  run_cmd "${TMP_DIR}/prog_${prog}_consensus.log" ./build/consensus/consensus 3
+  COMPUTATION_NODES=3
+  SESSION_ID="prog-matrix-${prog}"
+  ROUND_ID=$((7000 + RANDOM % 10000))
+  run_ack_verified_consensus "${TMP_DIR}/prog_${prog}_consensus.log" \
+    "${TMP_DIR}/prog_${prog}_ack_case_${ROUND_ID}" \
+    3 "${SESSION_ID}" "${ROUND_ID}" 1 2 3
 
   set +e
   run_cmd "${TMP_DIR}/prog_${prog}_bridge.log" \
@@ -285,7 +487,10 @@ clean_workspace
 run_cmd "${TMP_DIR}/crash_p1.log" ./build/node/data_provider 1 100 --computation-nodes 2
 run_cmd "${TMP_DIR}/crash_p2.log" ./build/node/data_provider 2 200 --computation-nodes 2
 # Consensus quorum = 2 → decides without provider 3.
-run_cmd "${TMP_DIR}/crash_consensus.log" ./build/consensus/consensus 2
+COMPUTATION_NODES=2
+SESSION_ID="crash-provider-absent"
+ROUND_ID=1
+run_ack_verified_consensus "${TMP_DIR}/crash_consensus.log" "${TMP_DIR}/crash_ack_case" 2 "${SESSION_ID}" "${ROUND_ID}" 1 2
 
 if [[ -f core_set.txt ]] \
   && assert_contains "1" core_set.txt \

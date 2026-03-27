@@ -312,7 +312,7 @@ static std::optional<std::string> base64_decode(const std::string& b64) {
     return std::string(reinterpret_cast<const char*>(bin.data()), bin_len);
 }
 
-static std::optional<std::string> base64_encode(const std::string& s) {
+[[maybe_unused]] static std::optional<std::string> base64_encode(const std::string& s) {
     if (s.empty()) return std::string();
     const size_t max_len = sodium_base64_ENCODED_LEN(s.size(), sodium_base64_VARIANT_ORIGINAL);
     std::string out(max_len, '\0');
@@ -555,7 +555,7 @@ static std::optional<SchemaPtr> parse_schema_node(const Json& j,
                                                   const JsonObject& registry_schemas,
                                                   std::vector<std::string>& stack);
 
-static std::optional<SchemaPtr> parse_ref_schema(const std::string& schema_id,
+[[maybe_unused]] static std::optional<SchemaPtr> parse_ref_schema(const std::string& schema_id,
                                                  const JsonObject& registry_schemas,
                                                  std::vector<std::string>& stack) {
     // detect recursion cycles (allowed) by stack; we still allow, but prevent infinite expansion.
@@ -847,7 +847,7 @@ public:
         //   C_x = x*G + r_x*H  =>  x*G = C_x - r_x*H
         unsigned char rH[crypto_core_ristretto255_BYTES];
         unsigned char xG[crypto_core_ristretto255_BYTES];
-        crypto_scalarmult_ristretto255(rH, r_x, Hp);
+        if (crypto_scalarmult_ristretto255(rH, r_x, Hp) != 0) return false;
         crypto_core_ristretto255_sub(xG, C_x, rH);
 
         // -------------------------------------------------------------------
@@ -963,7 +963,7 @@ public:
             }
             // Cross-check: xG derived from x_randomizer must equal x_scalar*G.
             unsigned char xG_check[crypto_core_ristretto255_BYTES];
-            crypto_scalarmult_ristretto255(xG_check, x_scalar, Gp);
+            if (crypto_scalarmult_ristretto255(xG_check, x_scalar, Gp) != 0) return false;
             if (std::memcmp(xG_check, xG, crypto_core_ristretto255_BYTES) != 0) return false;
         }
 
@@ -1023,7 +1023,7 @@ public:
             std::memcpy(r_scalar_p, r_bytes_opt->data(), crypto_core_ristretto255_SCALARBYTES);
 
             unsigned char rH[crypto_core_ristretto255_BYTES];
-            crypto_scalarmult_ristretto255(rH, r_scalar_p, Hp);
+            if (crypto_scalarmult_ristretto255(rH, r_scalar_p, Hp) != 0) return false;
 
             unsigned char shareG[crypto_core_ristretto255_BYTES];
             crypto_core_ristretto255_sub(shareG, shareC, rH);
@@ -1039,8 +1039,8 @@ public:
 
         unsigned char carryG[crypto_core_ristretto255_BYTES];
         unsigned char maskedG[crypto_core_ristretto255_BYTES];
-        crypto_scalarmult_ristretto255(carryG, carry_scalar, Gp);
-        crypto_scalarmult_ristretto255(maskedG, masked_scalar, Gp);
+        if (crypto_scalarmult_ristretto255(carryG, carry_scalar, Gp) != 0) return false;
+        if (crypto_scalarmult_ristretto255(maskedG, masked_scalar, Gp) != 0) return false;
 
         unsigned char leftG[crypto_core_ristretto255_BYTES];
         unsigned char rightG[crypto_core_ristretto255_BYTES];

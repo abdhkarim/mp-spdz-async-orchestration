@@ -43,10 +43,12 @@ Variable optionnelle : `MPC_PROVIDER_SECRET` (sinon `mpc-demo-secret`, secret de
 | Élément | Détail |
 |--------|--------|
 | Code | `consensus/src/consensus.cpp` (admission + vérif `type_proof`), `consensus/src/type_proof.cpp` (backends), `consensus/src/share_verifier.cpp` (production d'ACK) |
-| Binaire | `./build/consensus/consensus [min_inputs] [--acks-dir … --k … …]` |
+| Binaire | `./build/consensus/consensus [min_inputs] --acks-dir … --num-parties … --session-id … --round-id … [--timeout-seconds …] [--schema-id …] [--protocol-version …]` |
 | Sortie | `core_set.txt` (un identifiant de provider par ligne) |
 
-Sans `--acks-dir` : consensus valide preuve BLAKE2b + syntaxe du wire + `type_proof` et sélectionne un `core_set.txt` dès qu'il atteint au moins `min_inputs` provider admissibles. Avec `--acks-dir` : en plus, consensus vérifie les ACKs signés et impose une couverture complète des `party_index` `0..k-1` avant d'admettre le provider (`--timeout-seconds` + anti-replay).
+Dans la workflow standard de ce dépôt, `consensus` est exécuté en mode ACK-verified (avec `--acks-dir`) : l’admission est prouvée par des ACKs signés et une couverture complète des `party_index` `0..k-1` avant d’admettre le provider (`--timeout-seconds` + anti-replay).
+
+Le mode sans `--acks-dir` est conservé uniquement pour des expérimentations / debugging.
 
 ### Zone 3 — Bridge MP-SPDZ (semi2k uniquement)
 
@@ -89,7 +91,7 @@ Le masquage et les parts ne passent pas par un `issue_secrets.mpc` : ils sont g�
 mp-spdz-async-orchestration/
 ├── CMakeLists.txt
 ├── LICENSE
-├── demo_gui.py              # interface Tkinter optionnelle (lancer depuis la racine du dépôt)
+├── project_gui.py           # interface GUI (lancer depuis la racine du dépôt)
 ├── common/                  # bibliothèque partagée
 ├── node/                    # data_provider
 ├── consensus/               # consensus + ack_crypto_tool
@@ -162,13 +164,15 @@ wsl -e bash -lc "cd /chemin/vers/mp-spdz-async-orchestration && ./scripts/run_br
 
 Pas d’option `--backend` : le bridge prend `--computation-nodes` et un **chemin optionnel vers un `.mpc`** (ex. `programs/avg.mpc`). Sans second argument, il utilise **`programs/sum.mpc`**.
 
-### Interface graphique optionnelle
+### Interface graphique (nouvelle)
 
 ```bash
-python3 demo_gui.py
+python3 project_gui.py
 ```
 
-À lancer **depuis la racine du dépôt** après compilation. `demo_gui.py` propose plusieurs **onglets** : flux manuel (zones 1→3), **orchestrateur ACK** (`async_orchestrator.py`), **scénarios de sécurité** (altération BLAKE2b, provider tardif, confidentialité du masquage, crash, matrice de programmes `.mpc`), et **intégration** (lancement de `scripts/full_system_validation_wsl.sh`). Les commandes utilisent `./build/...` avec `cwd` = racine du projet.
+À lancer **depuis la racine du dépôt** après compilation. `project_gui.py` pilote directement les binaires réels : provider → share_verifier (ACK) → consensus (ACK obligatoire) → bridge/MP-SPDZ (optionnel), et permet de lancer la validation (`scripts/full_system_validation_wsl.sh`). Les commandes utilisent `./build/...` avec `cwd` = racine du projet.
+
+Cette nouvelle GUI (`project_gui.py`) est une ré-implémentation from-scratch qui pilote directement les binaires réels (`data_provider`, `share_verifier`, `consensus`, `spdz_bridge`) et le script de validation, avec logs live et annulation de processus. Elle n’utilise aucun orchestrateur.
 
 ## Démo rapide (2 providers, 3ᵉ absent)
 
@@ -176,43 +180,63 @@ Le consensus doit avoir **`min_inputs` = 2** si seuls les providers 1 et 2 sont 
 
 ```bash
 export MPC_PROVIDER_SECRET="mpc-demo-secret"   # optionnel
-
 rm -rf inputs logs artifacts core_set.txt provider_secrets
 mkdir -p inputs logs artifacts provider_secrets
 
 ./build/node/data_provider 1 7 --computation-nodes 2
 ./build/node/data_provider 2 15 --computation-nodes 2
 
-./build/consensus/consensus 2
+ACKS_DIR="artifacts/demo_acks"
+CN_KEYS_DIR="artifacts/demo_cn_keys"
+rm -rf "${ACKS_DIR}" "${CN_KEYS_DIR}"
+mkdir -p "${ACKS_DIR}" "${CN_KEYS_DIR}"
 
+./build/consensus/ack_crypto_tool gen-keypair "${CN_KEYS_DIR}/cn_0.pub.hex" "${CN_KEYS_DIR}/cn_0.sec.hex"
+./build/consensus/ack_crypto_tool gen-keypair "${CN_KEYS_DIR}/cn_1.pub.hex" "${CN_KEYS_DIR}/cn_1.sec.hex"
+
+# Generate ACKs (one per provider × party_index).
+for pid in 1 2; do
+  for party in 0 1; do
+    ./build/consensus/share_verifier \
+      --session-id demo-session \
+      --round-id 0 \
+      --protocol-version 1 \
+      --schema-id semi2k-wire-v1 \
+      --provider-id "${pid}" \
+      --party-index "${party}" \
+      --inputs-dir inputs \
+      --provider-secrets-dir provider_secrets \
+      --share-manifest-path "inputs/provider_${pid}_manifest.json" \
+      --cn-keys-dir "${CN_KEYS_DIR}" \
+      --acks-out-dir "${ACKS_DIR}"
+  done
+done
+
+# Run consensus (ACK mandatory).
+./build/consensus/consensus 2 \
+  --acks-dir "${ACKS_DIR}" \
+  --num-parties 2 \
+  --session-id demo-session \
+  --round-id 0 \
+  --timeout-seconds 0 \
+  --artifacts-dir artifacts \
+  --cn-keys-dir "${CN_KEYS_DIR}" \
+  --protocol-version 1 \
+  --schema-id semi2k-wire-v1
+
+# Optional MPC step:
 ./build/spdz_bridge/spdz_bridge --computation-nodes 2
-# autre programme (ex. moyenne) :
-# ./build/spdz_bridge/spdz_bridge --computation-nodes 2 programs/avg.mpc
 ```
 
 Ne pas appeler `consensus 3` avec seulement deux fichiers provider valides : échec (« pas assez d’entrées ») et pas de `core_set.txt`.
 
-## Orchestration asynchrone (`async_orchestrator.py`)
+## Workflow canonique (commandes directes)
 
-`scripts/run_async_round_wsl.sh` compile les binaires nécessaires puis appelle l’orchestrateur. **Il n’y a pas d’option `--backend`** (le champ `backend: semi2k` dans `artifacts/run_meta.json` est informatif). L’orchestrateur lance le bridge **sans** argument de programme : exécution du défaut **`programs/sum.mpc`**. Pour un autre `.mpc`, lancer `spdz_bridge` manuellement avec le chemin voulu après le round.
+L’architecture canonique ne dépend pas d’un orchestrateur central. Le workflow est :
 
-En mode ACK, l’orchestrateur génère les ACKs **uniquement** via `consensus/share_verifier` (un ACK moderne par `party_index`). `consensus` ne supporte plus d’ancien format d’ACK.
+`data_provider → share_verifier (ACKs) → consensus (ACK obligatoire) → (optionnel) spdz_bridge → (optionnel) MP-SPDZ`
 
-```bash
-./scripts/run_async_round_wsl.sh \
-  --clean \
-  --session-id demo-session \
-  --round-id 0 \
-  --providers 1:10,2:20,3:30,4:40,5:50 \
-  --k-acks 2 \
-  --ack-nodes 3 \
-  --ack-timeout-seconds 2 \
-  --computation-nodes 3
-```
-
-Artefacts : `artifacts/run_meta.json`, `artifacts/core_set.json`, `artifacts/justification.json`, `artifacts/acks/`, `artifacts/cn_keys/`. Schémas : `schemas/*.schema.json`.
-
-Astuce tests : `--skip-bridge` permet de s’arrêter après la décision du consensus (utile si `semi2k-party.x` n’est pas compilé).
+La GUI (`project_gui.py`) exécute ces mêmes binaires directement.
 
 ## Tests d’intégration complets
 

@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <sodium.h>
 #include <sstream>
 #include <string>
@@ -240,7 +241,7 @@ std::string to_hex(const unsigned char* data, size_t len) {
     return out;
 }
 
-static std::vector<unsigned char> from_hex_to_bytes(const std::string& hex) {
+[[maybe_unused]] static std::vector<unsigned char> from_hex_to_bytes(const std::string& hex) {
     auto nibble = [](char c) -> int {
         if (c >= '0' && c <= '9') return c - '0';
         if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -342,16 +343,22 @@ static OrProof prove_commitment_one_of_two(const unsigned char C[crypto_core_ris
         crypto_core_ristretto255_scalar_mul(out, a, b);
     };
 
-    auto point_mul = [](unsigned char out[32], const unsigned char s[32], const unsigned char P[32]) {
-        crypto_scalarmult_ristretto255(out, s, P);
+    auto point_mul = [](unsigned char out[32], const unsigned char s[32], const unsigned char P[32]) -> bool {
+        return crypto_scalarmult_ristretto255(out, s, P) == 0;
     };
 
     auto point_sub = [](unsigned char out[32], const unsigned char A[32], const unsigned char B[32]) {
         crypto_core_ristretto255_sub(out, A, B);
     };
 
-    unsigned char m0G[32]; (void)crypto_scalarmult_ristretto255(m0G, m0_scalar, G);
-    unsigned char m1G[32]; (void)crypto_scalarmult_ristretto255(m1G, m1_scalar, G);
+    unsigned char m0G[32];
+    unsigned char m1G[32];
+    if (crypto_scalarmult_ristretto255(m0G, m0_scalar, G) != 0) {
+        throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(m0G) failed");
+    }
+    if (crypto_scalarmult_ristretto255(m1G, m1_scalar, G) != 0) {
+        throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(m1G) failed");
+    }
 
     unsigned char C_minus_m0G[32]; point_sub(C_minus_m0G, C, m0G);
     unsigned char C_minus_m1G[32]; point_sub(C_minus_m1G, C, m1G);
@@ -362,12 +369,20 @@ static OrProof prove_commitment_one_of_two(const unsigned char C[crypto_core_ris
 
     // Real branch witness commitment: a_real = w*H.
     unsigned char w[32]; crypto_core_ristretto255_scalar_random(w);
-    unsigned char a_real[32]; point_mul(a_real, w, H);
+    unsigned char a_real[32];
+    if (!point_mul(a_real, w, H)) {
+        throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(a_real) failed");
+    }
 
     // Simulated branch commitment: a_sim = s_sim*H + e_sim*(C - m_sim*G).
-    unsigned char sH[32]; point_mul(sH, s_sim, H);
+    unsigned char sH[32];
+    if (!point_mul(sH, s_sim, H)) {
+        throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(sH) failed");
+    }
     unsigned char eX[32];
-    point_mul(eX, e_sim, is_m0 ? C_minus_m1G : C_minus_m0G); // simulate opposite branch
+    if (!point_mul(eX, e_sim, is_m0 ? C_minus_m1G : C_minus_m0G)) { // simulate opposite branch
+        throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(eX) failed");
+    }
     unsigned char a_sim[32]; crypto_core_ristretto255_add(a_sim, sH, eX);
 
     // Fiat-Shamir challenge e = H(domain | C | a0 | a1).
@@ -427,7 +442,8 @@ static uint64_t parse_signed_decimal_mod2_64(const std::string& s) {
         char c = s[i];
         if (c < '0' || c > '9') break;
         uint64_t d = static_cast<uint64_t>(c - '0');
-        __uint128_t tmp = static_cast<__uint128_t>(acc) * 10 + d;
+        using boost::multiprecision::uint128_t;
+        uint128_t tmp = uint128_t(acc) * 10 + d;
         acc = static_cast<uint64_t>(tmp); // mod 2^64 by truncation
     }
     if (!neg) return acc;
@@ -442,15 +458,16 @@ static bool proof_real_carry_coefficient_ok(const std::vector<uint64_t>& shares,
                                             const std::string& masked_value,
                                             uint64_t x_u64) {
     const uint64_t masked_u64 = parse_signed_decimal_mod2_64(masked_value);
-    __int128_t V = 0;
-    for (uint64_t sh : shares) V += static_cast<__int128_t>(sh);
-    const __int128_t diff =
-        static_cast<__int128_t>(masked_u64) + V - static_cast<__int128_t>(x_u64);
+    using boost::multiprecision::int128_t;
+    using boost::multiprecision::uint128_t;
+    int128_t V = 0;
+    for (uint64_t sh : shares) V += int128_t(sh);
+    const int128_t diff = int128_t(masked_u64) + V - int128_t(x_u64);
     if (diff < 0) return false;
-    const auto du = static_cast<unsigned __int128>(diff);
-    const unsigned __int128 uq = static_cast<unsigned __int128>(1) << 64;
-    if (du % uq != 0) return false;
-    const unsigned __int128 t = du / uq;
+    const uint128_t du = uint128_t(diff);
+    const uint128_t uq = uint128_t(1) << 64;
+    if ((du % uq) != 0) return false;
+    const uint128_t t = du / uq;
     return t <= 1;
 }
 
@@ -929,9 +946,6 @@ int write_provider_file(const std::string& id,
                 crypto_core_ristretto255_add(C_t, a, b);
 
                 // OR proof for carry commitment in {0, 2^64}.
-                const uint64_t m0 = 0ULL;
-                const uint64_t m1 = 0ULL; // placeholder; encoded in scalar via (bit 64) for 2^64
-                (void)m1;
                 unsigned char zero_scalar[crypto_core_ristretto255_SCALARBYTES];
                 std::memset(zero_scalar, 0, sizeof(zero_scalar));
                 unsigned char two64_scalar[crypto_core_ristretto255_SCALARBYTES];

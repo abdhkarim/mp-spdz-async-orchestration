@@ -528,9 +528,10 @@ int main(int argc, char* argv[]) {
         return std::string("mpc-demo-secret");
     }();
 
-    // Arguments:
-    //   ./consensus [min_inputs] [--clean-inputs]
-    //   ./consensus [--clean-inputs] [min_inputs]
+    // Arguments (ACK is mandatory):
+    //   ./consensus [min_inputs] --acks-dir <dir> --num-parties <N> --session-id <id> --round-id <id>
+    //              [--k <K>] [--timeout-seconds <S>] [--protocol-version <v>] [--schema-id <id>]
+    //              [--artifacts-dir <dir>] [--cn-keys-dir <dir>] [--clean-inputs]
     int min_inputs = 3;
     bool clean_inputs = false;
     bool min_inputs_set = false;
@@ -657,7 +658,7 @@ int main(int argc, char* argv[]) {
             const auto parsed_min_inputs = parse_integer(arg);
             if (!parsed_min_inputs || *parsed_min_inputs <= 0) {
                 std::cerr << "Invalid argument: " << arg << "\n";
-                std::cerr << "Usage: ./consensus [min_inputs] [--clean-inputs]\n";
+                std::cerr << "Usage: ./consensus [min_inputs] --acks-dir <dir> --num-parties <N> [--clean-inputs] ...\n";
                 return 1;
             }
             min_inputs = static_cast<int>(*parsed_min_inputs);
@@ -666,7 +667,13 @@ int main(int argc, char* argv[]) {
         }
 
         std::cerr << "Unexpected argument: " << arg << "\n";
-        std::cerr << "Usage: ./consensus [min_inputs] [--clean-inputs]\n";
+        std::cerr << "Usage: ./consensus [min_inputs] --acks-dir <dir> --num-parties <N> [--clean-inputs] ...\n";
+        return 1;
+    }
+
+    if (!ack_mode) {
+        std::cerr << "ACK evidence is mandatory. Missing required flag: --acks-dir <dir>\n";
+        std::cerr << "Refusing to run consensus without ACK verification.\n";
         return 1;
     }
 
@@ -834,19 +841,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (ack_mode) {
+    {
         if (!fs::exists(acks_dir) || !fs::is_directory(acks_dir)) {
-            std::cerr << "ACK mode enabled but acks directory not found: " << acks_dir << "\n";
+            std::cerr << "ACK evidence directory not found: " << acks_dir << "\n";
             return 1;
         }
         if (k_required <= 0) {
-            std::cerr << "ACK mode enabled but --num-parties (required coverage size) not provided.\n";
+            std::cerr << "Missing required ACK coverage size: --num-parties <N> (or --k <K>).\n";
             return 1;
         }
 
         const std::set<int> candidate_providers(core_set_ids.begin(), core_set_ids.end());
         if (candidate_providers.empty()) {
-            std::cerr << "ACK mode enabled but no candidate providers after provider-input validation.\n";
+            std::cerr << "No candidate providers after provider-input validation.\n";
             return 1;
         }
 
@@ -997,15 +1004,13 @@ int main(int argc, char* argv[]) {
     core_set_ids.erase(std::unique(core_set_ids.begin(), core_set_ids.end()), core_set_ids.end());
 
     if (static_cast<int>(core_set_ids.size()) < min_inputs) {
-        if (ack_mode) {
-            fs::create_directories(artifacts_dir);
-            write_core_set_json(artifacts_dir / "core_set.json",
-                                session_id, round_id, k_required, timeout_seconds, core_set_ids);
-            write_justification_json(artifacts_dir / "justification.json",
-                                     session_id, round_id, core_set_ids, rejected_reasons,
-                                     distinct_acks_by_provider, evidence_files_by_provider);
-            std::cout << "Wrote ACK-based artifacts in " << artifacts_dir << "\n";
-        }
+        fs::create_directories(artifacts_dir);
+        write_core_set_json(artifacts_dir / "core_set.json",
+                            session_id, round_id, k_required, timeout_seconds, core_set_ids);
+        write_justification_json(artifacts_dir / "justification.json",
+                                 session_id, round_id, core_set_ids, rejected_reasons,
+                                 distinct_acks_by_provider, evidence_files_by_provider);
+        std::cout << "Wrote ACK-based artifacts in " << artifacts_dir << "\n";
         if (fs::exists(core_set_file)) {
             fs::remove(core_set_file);
         }
@@ -1036,15 +1041,13 @@ int main(int argc, char* argv[]) {
     std::cout << "\n";
     std::cout << "Wrote " << core_set_file << "\n";
 
-    if (ack_mode) {
-        fs::create_directories(artifacts_dir);
-        write_core_set_json(artifacts_dir / "core_set.json",
-                            session_id, round_id, k_required, timeout_seconds, core_set_ids);
-        write_justification_json(artifacts_dir / "justification.json",
-                                 session_id, round_id, core_set_ids, rejected_reasons,
-                                 distinct_acks_by_provider, evidence_files_by_provider);
-        std::cout << "Wrote ACK-based artifacts in " << artifacts_dir << "\n";
-    }
+    fs::create_directories(artifacts_dir);
+    write_core_set_json(artifacts_dir / "core_set.json",
+                        session_id, round_id, k_required, timeout_seconds, core_set_ids);
+    write_justification_json(artifacts_dir / "justification.json",
+                             session_id, round_id, core_set_ids, rejected_reasons,
+                             distinct_acks_by_provider, evidence_files_by_provider);
+    std::cout << "Wrote ACK-based artifacts in " << artifacts_dir << "\n";
 
     return 0;
 }
