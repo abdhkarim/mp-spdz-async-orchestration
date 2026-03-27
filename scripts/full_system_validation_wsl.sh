@@ -15,6 +15,46 @@
 
 set -euo pipefail
 
+# Optional execution targeting for the GUI:
+#   bash scripts/full_system_validation_wsl.sh --only <key>
+# Where <key> maps to section selectors:
+#   - ack-attack:<scenario>  (e.g. ack-attack:normal)
+#   - tampering
+#   - late-provider
+#   - crash-provider
+#   - mpc-matrix
+# If --only is omitted, the script runs the full suite.
+ONLY_KEY=""
+if [[ "${1:-}" == "--only" ]]; then
+  ONLY_KEY="${2:-}"
+fi
+
+gui_case() {
+  # Example: GUI_CASE:ack-attack:normal
+  echo "GUI_CASE:${1}"
+}
+
+gui_step() {
+  # Example: GUI_STEP:consensus:success
+  echo "GUI_STEP:${1}:${2}"
+}
+
+# Validate ONLY_KEY values early (so invalid GUI selections fail fast).
+if [[ -n "${ONLY_KEY}" ]]; then
+  case "${ONLY_KEY}" in
+    ack-attack:normal | ack-attack:insufficient-acks | ack-attack:stale-ack | ack-attack:replay-ack | ack-attack:tampered-ack)
+      ;;
+    tampering | late-provider | crash-provider | mpc-matrix | confidentiality | semantic | proofreal)
+      ;;
+    typeproof* )
+      ;;
+    *)
+      echo "[full-test] ERROR: unknown --only key: ${ONLY_KEY}" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -107,6 +147,8 @@ run_ack_verified_consensus() {
   local artifacts_dir="${case_dir}/artifacts"
   mkdir -p "${acks_dir}" "${cn_keys_dir}" "${artifacts_dir}"
 
+  gui_step ack start
+
   # Prepare per-party verifier ACK keys.
   for cn_id in $(seq 0 $((COMPUTATION_NODES - 1))); do
     run_cmd "${case_dir}/cn_key_${cn_id}.log" \
@@ -140,7 +182,10 @@ run_ack_verified_consensus() {
     done
   done
 
+  gui_step ack success
+
   # Run consensus admission (ACK mode).
+  gui_step consensus start
   (
     set +e
     run_cmd "${outfile}" \
@@ -156,11 +201,18 @@ run_ack_verified_consensus() {
         --protocol-version "${PROTOCOL_VERSION}"
     exit $?
   )
-  return $?
+  local rc=$?
+  if [[ $rc -eq 0 ]]; then
+    gui_step consensus success
+  else
+    gui_step consensus failed
+  fi
+  return $rc
 }
 
 # ─── Section 1: ACK / asynchrony attack scenarios ───────────────────────────
 
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == ack-attack* ]]; then
 log "1) ACK / asynchrony attack scenarios (no orchestrator)"
 
 run_ack_attack_scenario() {
@@ -176,17 +228,22 @@ run_ack_attack_scenario() {
   ROUND_ID=1
 
   # Providers and values.
+  gui_case "ack-attack:${scenario}"
+  gui_step providers start
   run_cmd "${TMP_DIR}/scenario_${scenario}_p1.log" ./build/node/data_provider 1 10 --computation-nodes 3
   run_cmd "${TMP_DIR}/scenario_${scenario}_p2.log" ./build/node/data_provider 2 20 --computation-nodes 3
   run_cmd "${TMP_DIR}/scenario_${scenario}_p3.log" ./build/node/data_provider 3 30 --computation-nodes 3
   run_cmd "${TMP_DIR}/scenario_${scenario}_p4.log" ./build/node/data_provider 4 40 --computation-nodes 3
   run_cmd "${TMP_DIR}/scenario_${scenario}_p5.log" ./build/node/data_provider 5 50 --computation-nodes 3
+  gui_step providers success
 
   local case_dir="${TMP_DIR}/scenario_${scenario}"
   local acks_dir="${case_dir}/acks"
   local cn_keys_dir="${case_dir}/cn_keys"
   local artifacts_dir="${case_dir}/artifacts"
   mkdir -p "${acks_dir}" "${cn_keys_dir}" "${artifacts_dir}"
+
+  gui_step ack start
 
   # CN keypairs.
   for cn_id in $(seq 0 $((COMPUTATION_NODES - 1))); do
@@ -237,6 +294,8 @@ PY
     done
   done
 
+  gui_step ack success
+
   # replay-ack: duplicate a provider+party ACK under a different filename.
   if [[ "${scenario}" == "replay-ack" ]]; then
     cp -f "${acks_dir}/ack_p5_party0.json" "${acks_dir}/ack_p5_party0_replay.json" || true
@@ -262,6 +321,8 @@ PY
   fi
 
   set +e
+
+  gui_step consensus start
   run_cmd "${TMP_DIR}/scenario_${scenario}.log" \
     "${CONSENSUS_BIN}" 5 \
       --acks-dir "${acks_dir}" \
@@ -279,12 +340,15 @@ PY
   if [[ "${expected}" == "ok" && ${rc} -eq 0 ]]; then
     append_summary "scenario:${scenario}" "PASS" "expected success"
     mark_pass
+    gui_step consensus success
   elif [[ "${expected}" == "fail" && ${rc} -ne 0 ]]; then
     append_summary "scenario:${scenario}" "PASS" "expected rejection"
     mark_pass
+    gui_step consensus success
   else
     append_summary "scenario:${scenario}" "FAIL" "unexpected exit code ${rc}"
     mark_fail
+    gui_step consensus failed
   fi
 }
 
@@ -296,20 +360,44 @@ SCENARIOS=(
   "stale-ack:fail"
 )
 
+ACK_ONLY_SCENARIO=""
+if [[ "${ONLY_KEY}" == ack-attack:* ]]; then
+  ACK_ONLY_SCENARIO="${ONLY_KEY#ack-attack:}"
+fi
+
+ACK_RAN=false
 for item in "${SCENARIOS[@]}"; do
   scenario="${item%%:*}"
   expected="${item##*:}"
+
+  if [[ -n "${ACK_ONLY_SCENARIO}" && "${scenario}" != "${ACK_ONLY_SCENARIO}" ]]; then
+    continue
+  fi
+
+  ACK_RAN=true
   run_ack_attack_scenario "${scenario}" "${expected}"
 done
 
+if [[ -n "${ACK_ONLY_SCENARIO}" && "${ACK_RAN}" != "true" ]]; then
+  echo "[full-test] ERROR: unknown/unsupported ack-attack scenario: ${ACK_ONLY_SCENARIO}" >&2
+  exit 2
+fi
+
+fi # end ack-attack section
+
 # ─── Section 2: Provider tampering detection ────────────────────────────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == tampering ]]; then
 
 log "2) Provider tampering — BLAKE2b proof mismatch"
 
+gui_case "tampering:provider-file"
+gui_step providers start
 clean_workspace
 run_cmd "${TMP_DIR}/tamper_p1.log" ./build/node/data_provider 1 11 --computation-nodes 3
 run_cmd "${TMP_DIR}/tamper_p2.log" ./build/node/data_provider 2 22 --computation-nodes 3
 run_cmd "${TMP_DIR}/tamper_p3.log" ./build/node/data_provider 3 33 --computation-nodes 3
+gui_step providers success
 
 # Corrupt provider 2's masked_value after it has been written (proof becomes invalid).
 python3 - <<'PY'
@@ -343,17 +431,25 @@ if [[ ${tamper_rc} -ne 0 ]]; then
 fi
 
 if [[ "${tamper_ok}" == "true" ]]; then
+  gui_step consensus success
   append_summary "tampering:provider-file" "PASS" "proof mismatch rejected by consensus"
   mark_pass
 else
+  gui_step consensus failed
   append_summary "tampering:provider-file" "FAIL" "tampering was not rejected"
   mark_fail
 fi
 
+fi
+
 # ─── Section 3: Late-provider asynchrony ────────────────────────────────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == late-provider ]]; then
 
 log "3) Late-provider asynchrony — late input excluded from core set"
 
+gui_case "late-provider"
+gui_step providers start
 clean_workspace
 run_cmd "${TMP_DIR}/late_p1.log" ./build/node/data_provider 1 5 --computation-nodes 3
 run_cmd "${TMP_DIR}/late_p2.log" ./build/node/data_provider 2 6 --computation-nodes 3
@@ -364,19 +460,26 @@ ROUND_ID=1
 run_ack_verified_consensus "${TMP_DIR}/late_consensus.log" "${TMP_DIR}/late_ack_case" 2 "${SESSION_ID}" "${ROUND_ID}" 1 2
 # Provider 3 arrives after consensus — must NOT appear in core_set.txt.
 run_cmd "${TMP_DIR}/late_p3.log" ./build/node/data_provider 3 7 --computation-nodes 3
+gui_step providers success
 
 if [[ -f core_set.txt ]] \
   && assert_contains "1" core_set.txt \
   && assert_contains "2" core_set.txt \
   && assert_not_contains "3" core_set.txt; then
+  gui_step consensus success
   append_summary "asynchrony:late-provider" "PASS" "late input correctly excluded from core set"
   mark_pass
 else
+  gui_step consensus failed
   append_summary "asynchrony:late-provider" "FAIL" "core set handling unexpected"
   mark_fail
 fi
 
+fi
+
 # ─── Section 4: Masking confidentiality check ───────────────────────────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == confidentiality ]]; then
 
 log "4) Masking confidentiality — bridge inputs never contain plain values"
 
@@ -416,7 +519,11 @@ else
   mark_fail
 fi
 
+fi
+
 # ─── Section 5: MPC program matrix with result verification ─────────────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == mpc-matrix ]]; then
 
 log "5) MPC program matrix — semi2k × {sum, avg, triple_sum, parity_sum}"
 # Providers: 1:7, 2:15, 3:20  => sum=42, avg=14, triple_sum=126, parity_sum=42%2=0
@@ -430,10 +537,13 @@ EXPECTED_RESULTS["parity_sum"]="0"
 MPC_PROGRAMS=( "sum" "avg" "triple_sum" "parity_sum" )
 
 for prog in "${MPC_PROGRAMS[@]}"; do
+  gui_case "mpc-matrix:${prog}"
   clean_workspace
+  gui_step providers start
   run_cmd "${TMP_DIR}/prog_${prog}_p1.log" ./build/node/data_provider 1 7 --computation-nodes 3
   run_cmd "${TMP_DIR}/prog_${prog}_p2.log" ./build/node/data_provider 2 15 --computation-nodes 3
   run_cmd "${TMP_DIR}/prog_${prog}_p3.log" ./build/node/data_provider 3 20 --computation-nodes 3
+  gui_step providers success
   COMPUTATION_NODES=3
   SESSION_ID="prog-matrix-${prog}"
   ROUND_ID=$((7000 + RANDOM % 10000))
@@ -441,6 +551,8 @@ for prog in "${MPC_PROGRAMS[@]}"; do
     "${TMP_DIR}/prog_${prog}_ack_case_${ROUND_ID}" \
     3 "${SESSION_ID}" "${ROUND_ID}" 1 2 3
 
+  gui_step bridge start
+  gui_step mp_spdz start
   set +e
   run_cmd "${TMP_DIR}/prog_${prog}_bridge.log" \
     ./build/spdz_bridge/spdz_bridge \
@@ -452,6 +564,8 @@ for prog in "${MPC_PROGRAMS[@]}"; do
   key="semi2k:${prog}"
 
   if [[ ${bridge_rc} -ne 0 ]]; then
+    gui_step bridge failed
+    gui_step mp_spdz failed
     if assert_contains "semi2k-party.x not found" "${TMP_DIR}/prog_${prog}_bridge.log"; then
       append_summary "${key}" "FAIL" "semi2k-party.x missing — build MP-SPDZ first"
     else
@@ -467,25 +581,39 @@ for prog in "${MPC_PROGRAMS[@]}"; do
   expected="${EXPECTED_RESULTS[${prog}]}"
 
   if [[ "${result_val}" == "${expected}" ]]; then
+    gui_step bridge success
+    gui_step mp_spdz success
     append_summary "${key}" "PASS" "result=${result_val} (expected ${expected})"
     mark_pass
   elif [[ -z "${result_val}" ]]; then
+    gui_step bridge failed
+    gui_step mp_spdz failed
     append_summary "${key}" "FAIL" "no result line in output"
     mark_fail
   else
+    gui_step bridge failed
+    gui_step mp_spdz failed
     append_summary "${key}" "FAIL" "wrong result=${result_val} (expected ${expected})"
     mark_fail
   fi
 done
 
+fi
+
 # ─── Section 6: Provider crash simulation ───────────────────────────────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == crash-provider ]]; then
 
 log "6) Provider crash simulation — absent provider excluded from core set"
 
+gui_case "crash-provider-absent"
 clean_workspace
+
+gui_step providers start
 # Providers 1 and 2 submit; provider 3 "crashes" (never submits).
 run_cmd "${TMP_DIR}/crash_p1.log" ./build/node/data_provider 1 100 --computation-nodes 2
 run_cmd "${TMP_DIR}/crash_p2.log" ./build/node/data_provider 2 200 --computation-nodes 2
+gui_step providers success
 # Consensus quorum = 2 → decides without provider 3.
 COMPUTATION_NODES=2
 SESSION_ID="crash-provider-absent"
@@ -499,6 +627,8 @@ if [[ -f core_set.txt ]] \
 
   # Bridge should compute sum = 300 for providers 1+2.
   set +e
+  gui_step bridge start
+  gui_step mp_spdz start
   run_cmd "${TMP_DIR}/crash_bridge.log" \
     ./build/spdz_bridge/spdz_bridge --computation-nodes 2
   crash_rc=$?
@@ -507,29 +637,47 @@ if [[ -f core_set.txt ]] \
   if [[ ${crash_rc} -eq 0 ]]; then
     crash_result=$(grep "MP-SPDZ result:" "${TMP_DIR}/crash_bridge.log" | grep -oP '(?<=MP-SPDZ result: )\S+' || true)
     if [[ "${crash_result}" == "300" ]]; then
+      gui_step bridge success
+      gui_step mp_spdz success
       append_summary "crash:provider-absent" "PASS" "core set={1,2}, result=300 correct"
       mark_pass
     elif [[ -z "${crash_result}" ]]; then
+      gui_step bridge failed
+      gui_step mp_spdz failed
       append_summary "crash:provider-absent" "FAIL" "no result after crash simulation"
       mark_fail
     else
+      gui_step bridge failed
+      gui_step mp_spdz failed
       append_summary "crash:provider-absent" "FAIL" "wrong result=${crash_result} (expected 300)"
       mark_fail
     fi
   else
     if assert_contains "semi2k-party.x not found" "${TMP_DIR}/crash_bridge.log"; then
+      gui_step bridge failed
+      gui_step mp_spdz failed
       append_summary "crash:provider-absent" "FAIL" "semi2k-party.x missing"
     else
+      gui_step bridge failed
+      gui_step mp_spdz failed
       append_summary "crash:provider-absent" "FAIL" "bridge failed (rc=${crash_rc})"
     fi
     mark_fail
   fi
 else
+  gui_step bridge failed
+  gui_step mp_spdz failed
   append_summary "crash:provider-absent" "FAIL" "core set did not exclude crashed provider"
   mark_fail
 fi
 
+fi
+
 # ─── Section 7: Type proof admission (provider-side; consensus-verified) ──
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == typeproof* ]]; then
+
+gui_case "typeproof"
 
 log "7) Type proof admission — negative + positive cases"
 
@@ -770,6 +918,8 @@ for item in "${SCENARIOS_TYPEPROOF[@]}"; do
   fi
 done
 
+fi
+
 # ─── Section 8: Semantic type proof backend (non-ZK) ─────────────────────────
 #
 # This section validates that the semantic backend is wired end-to-end:
@@ -778,6 +928,10 @@ done
 # - consensus verifies structure/semantic constraints for:
 #   int64, bool, fixed_point(scale), vector, tuple, record, recursive compositions
 #
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == semantic ]]; then
+
+gui_case "semantic"
+
 log "8) Semantic type proof backend — structured types (int64/bool/fixed_point/vector/tuple/record/recursive)"
 
 run_semantic_case() {
@@ -900,7 +1054,13 @@ run_semantic_case "record_extra_field_violation" "record_ab_v1" "0" "{\"a\":7,\"
 # recursive (nullable tail)
 run_semantic_case "recursive_positive_null_tail" "recursive_list_node_v1" "0" "{\"head\":1,\"tail\":null}" "ok"
 
+fi
+
 # ─── Section 9: proof-real-v1 backend (commitments + OR-proofs) ─────────
+
+if [[ -z "${ONLY_KEY}" || "${ONLY_KEY}" == proofreal ]]; then
+
+gui_case "proofreal"
 
 log "9) proof-real-v1 backend — carry + bool OR proofs"
 
@@ -1081,6 +1241,8 @@ run_proof_real_v1_case "proofreal-x-randomizer-tampered-int64" "fail" "int64-v1"
 run_proof_real_v1_case "proofreal-binding-mismatch-int64" "fail" "int64-v1" "123"
 run_proof_real_v1_case "proofreal-vector-structure-invalid" "fail" "vector_int64_len3_v1" "1"
 
+
+fi
 
 # ─── Final summary ───────────────────────────────────────────────────────────
 

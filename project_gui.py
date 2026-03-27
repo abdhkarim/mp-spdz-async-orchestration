@@ -58,17 +58,12 @@ def open_in_file_manager(path: Path) -> None:
 
 
 def wsl_bash_command(repo_root: Path, bash_cmd: str) -> list[str]:
-    # Use bash -lc so we can `cd` and run multiple commands.
-    # Keep quoting robust across spaces in Windows paths by using a WSL path.
-    # We convert `repo_root` via `wslpath` at runtime (fast).
-    # cmd: wsl -e bash -lc 'cd "$(wslpath "...")" && ...'
-    return [
-        "wsl",
-        "-e",
-        "bash",
-        "-lc",
-        f'cd "$(wslpath {shlex.quote(str(repo_root))})" && {bash_cmd}',
-    ]
+    # On Windows: run via wsl.exe and convert Windows path to WSL path.
+    # On Linux/WSL: run bash directly (there is no wsl.exe inside WSL).
+    if not is_windows():
+        return ["bash", "-lc", f"cd {shlex.quote(str(repo_root))} && {bash_cmd}"]
+
+    return ["wsl", "-e", "bash", "-lc", f'cd "$(wslpath {shlex.quote(str(repo_root))})" && {bash_cmd}']
 
 
 @dataclass(frozen=True)
@@ -260,22 +255,19 @@ class App(ttk.Frame):
         self.tab_build = ttk.Frame(self.notebook)
         self.tab_pipeline = ttk.Frame(self.notebook)
         self.tab_full = ttk.Frame(self.notebook)
-        self.tab_validation = ttk.Frame(self.notebook)
-        self.tab_scenarios = ttk.Frame(self.notebook)
+        self.tab_execution = ttk.Frame(self.notebook)
         self.tab_outputs = ttk.Frame(self.notebook)
 
         self.notebook.add(self.tab_build, text="Build / Setup")
         self.notebook.add(self.tab_pipeline, text="Manual Pipeline")
         self.notebook.add(self.tab_full, text="Full-cycle Run")
-        self.notebook.add(self.tab_validation, text="Validation / Tests")
-        self.notebook.add(self.tab_scenarios, text="Simulation / Scenarios")
+        self.notebook.add(self.tab_execution, text="Execution / Testing")
         self.notebook.add(self.tab_outputs, text="Outputs / Files")
 
         self._tab_build_ui()
         self._tab_pipeline_ui()
         self._tab_full_ui()
-        self._tab_validation_ui()
-        self._tab_scenarios_ui()
+        self._tab_execution_ui()
         self._tab_outputs_ui()
 
     def _build_log_panel(self, parent: ttk.Frame) -> None:
@@ -425,53 +417,153 @@ class App(ttk.Frame):
             text="Tip: keep `min_inputs` aligned with number of providers you actually run; consensus will reject otherwise.",
         ).grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
 
-    def _tab_validation_ui(self) -> None:
-        f = self.tab_validation
+    def _tab_execution_ui(self) -> None:
+        """
+        Unified execution/testing tab.
+        Replaces the old split between:
+          - Validation / Tests
+          - Simulation / Scenarios
+        """
+        f = self.tab_execution
         f.columnconfigure(0, weight=1)
 
+        header = ttk.Frame(f)
+        header.grid(row=0, column=0, sticky="we", padx=10, pady=(10, 6))
+        header.columnconfigure(1, weight=1)
+
         ttk.Label(
-            f,
-            text="Full integration validation (real script): scripts/full_system_validation_wsl.sh",
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 6))
-        ttk.Button(f, text="Run full validation", command=self._run_full_validation).grid(
-            row=1, column=0, sticky="w", padx=10, pady=(0, 10)
-        )
+            header,
+            text="One control center: choose a single execution target or run the full validation suite.",
+        ).grid(row=0, column=0, sticky="w")
+
+        # --- Controls ---
+        controls = ttk.LabelFrame(f, text="Execution target")
+        controls.grid(row=1, column=0, sticky="we", padx=10, pady=(0, 10))
+        controls.columnconfigure(1, weight=1)
+
+        self.execution_var = tk.StringVar(value="normal")
+        self.execution_targets: dict[str, Optional[str]] = {
+            "normal": "ack-attack:normal",
+            "insufficient ACKs": "ack-attack:insufficient-acks",
+            "stale ACK": "ack-attack:stale-ack",
+            "replay ACK": "ack-attack:replay-ack",
+            "tampered ACK": "ack-attack:tampered-ack",
+            "late / missing provider": "late-provider",
+            "provider crash simulation": "crash-provider",
+            "provider tampering (file/proof mismatch)": "tampering",
+            "MPC matrix": "mpc-matrix",
+            "Type proof admission": "typeproof",
+            "Semantic type proof backend": "semantic",
+            "Proof-real backend": "proofreal",
+            "Full validation suite": None,
+        }
+
+        display_values = list(self.execution_targets.keys())
+
+        ttk.Label(controls, text="Target").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        ttk.Combobox(
+            controls,
+            textvariable=self.execution_var,
+            values=display_values,
+            state="readonly",
+            width=46,
+        ).grid(row=0, column=1, sticky="we", padx=10, pady=8)
+
+        ttk.Button(
+            controls,
+            text="Run selected target",
+            command=self._run_selected_execution_target,
+        ).grid(row=0, column=2, sticky="w", padx=10, pady=8)
 
         btns = ttk.Frame(f)
-        btns.grid(row=2, column=0, sticky="w", padx=10)
+        btns.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
         ttk.Button(btns, text="Open backend_test_summary.txt", command=self._open_validation_summary).pack(
             side="left", padx=(0, 8)
         )
         ttk.Button(btns, text="Open .tmp_full_test_runs/", command=self._open_validation_runs).pack(side="left")
 
+        # --- Visualization ---
+        viz = ttk.LabelFrame(f, text="Workflow visualization")
+        viz.grid(row=3, column=0, sticky="we", padx=10, pady=(0, 10))
+        viz.columnconfigure(1, weight=1)
+
+        self.execution_case_var = tk.StringVar(value="Case: (none)")
+        ttk.Label(viz, textvariable=self.execution_case_var).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=8)
+
+        steps_grid = ttk.Frame(viz)
+        steps_grid.grid(row=1, column=0, columnspan=3, sticky="we", padx=10, pady=(0, 10))
+        steps_grid.columnconfigure(1, weight=1)
+
+        step_titles: list[tuple[str, str]] = [
+            ("providers", "Provider(s)"),
+            ("ack", "ACK generation"),
+            ("consensus", "Consensus"),
+            ("bridge", "Optional bridge"),
+            ("mp_spdz", "Optional MP-SPDZ"),
+        ]
+
+        self.exec_step_label_widgets: dict[str, tk.Label] = {}
+        for i, (step_key, step_title) in enumerate(step_titles):
+            ttk.Label(steps_grid, text=step_title).grid(row=i, column=0, sticky="w", pady=4)
+            lbl = tk.Label(steps_grid, text="Idle", width=14, anchor="w", bg="#d9d9d9", fg="#111111")
+            lbl.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=4)
+            self.exec_step_label_widgets[step_key] = lbl
+
+        self._execution_reset_steps()
+
         ttk.Label(
             f,
-            text="This covers scenarios like insufficient ACKs, stale/replay/tampered ACK, late-provider, tampering, and MPC matrix.",
-        ).grid(row=3, column=0, sticky="w", padx=10, pady=(10, 0))
+            text="Backend emits `GUI_CASE:` and `GUI_STEP:<step>:<state>` markers; visualization updates live.",
+        ).grid(row=4, column=0, sticky="w", padx=10, pady=(0, 6))
 
-    def _tab_scenarios_ui(self) -> None:
-        f = self.tab_scenarios
-        f.columnconfigure(1, weight=1)
+    def _execution_reset_steps(self) -> None:
+        for step_key in getattr(self, "exec_step_label_widgets", {}):
+            self._set_step_state(step_key, "idle")
 
-        ttk.Label(
-            f,
-            text="Scenario runner (implemented via the real binaries; no orchestrator):",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 6))
+    def _set_step_state(self, step_key: str, state: str) -> None:
+        if step_key not in getattr(self, "exec_step_label_widgets", {}):
+            return
 
-        self.scenario_var = tk.StringVar(value="normal")
-        scenarios = ["normal", "insufficient_acks", "stale_ack", "replay_ack", "tampered_ack"]
-        ttk.Label(f, text="Scenario").grid(row=1, column=0, sticky="w", padx=10)
-        ttk.Combobox(f, textvariable=self.scenario_var, values=scenarios, state="readonly").grid(
-            row=1, column=1, sticky="w", padx=10
-        )
-        ttk.Button(f, text="Run scenario", command=self._run_selected_scenario).grid(
-            row=1, column=2, sticky="w", padx=10
-        )
+        colors = {
+            "idle": ("Idle", "#d9d9d9", "#111111"),
+            "running": ("Running…", "#f0ad4e", "#111111"),
+            "success": ("Success", "#5cb85c", "white"),
+            "failed": ("Failed", "#d9534f", "white"),
+        }
+        text, bg, fg = colors.get(state, colors["idle"])
+        self.exec_step_label_widgets[step_key].config(text=text, bg=bg, fg=fg)
 
-        ttk.Label(
-            f,
-            text="Scenarios map to: providers → CN keys → share_verifier ACKs → (mutate ACK set) → consensus (ACK mandatory).",
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 0))
+    def _handle_gui_markers(self, line: str) -> bool:
+        """
+        Parses backend markers to drive the workflow visualization.
+
+        Markers:
+          - `GUI_CASE:<name>`
+          - `GUI_STEP:<step_key>:<start|success|failed>`
+        """
+        s = (line or "").strip()
+        if not s:
+            return False
+
+        if s.startswith("GUI_CASE:"):
+            case_name = s[len("GUI_CASE:") :].strip()
+            self.execution_case_var.set(f"Case: {case_name}" if case_name else "Case: (none)")
+            self._execution_reset_steps()
+            return True
+
+        if s.startswith("GUI_STEP:"):
+            rest = s[len("GUI_STEP:") :]
+            parts = rest.split(":", 2)
+            if len(parts) >= 2:
+                step_key = parts[0].strip()
+                step_state = parts[1].strip()
+                if step_state == "start":
+                    self._set_step_state(step_key, "running")
+                elif step_state in {"success", "failed"}:
+                    self._set_step_state(step_key, step_state)
+                return True
+
+        return False
 
     def _tab_outputs_ui(self) -> None:
         f = self.tab_outputs
@@ -511,7 +603,8 @@ class App(ttk.Frame):
             while True:
                 kind, payload = self.q.get_nowait()
                 if kind == "line":
-                    self._log_append(payload)
+                    if not self._handle_gui_markers(payload):
+                        self._log_append(payload)
                 elif kind == "state":
                     self.status_var.set(payload)
                 else:
@@ -617,6 +710,19 @@ class App(ttk.Frame):
     def _clean_workspace(self) -> None:
         if not messagebox.askyesno("Confirm", "Delete generated workspace folders/files?"):
             return
+        # Also clean GUI-specific artifacts dirs (may be user-customized).
+        gui_extra_targets: list[Path] = []
+        try:
+            gui_acks_dir = (REPO_ROOT / Path(self.acks_dir_var.get())).resolve()
+            gui_extra_targets.append(gui_acks_dir)
+        except Exception:
+            pass
+        try:
+            gui_cn_keys_dir = (REPO_ROOT / Path(self.cn_keys_dir_var.get())).resolve()
+            gui_extra_targets.append(gui_cn_keys_dir)
+        except Exception:
+            pass
+
         targets = [
             self.inputs_dir,
             self.logs_dir,
@@ -626,7 +732,15 @@ class App(ttk.Frame):
             self.validation_summary_path,
             self.validation_runs_dir,
         ]
-        for p in targets:
+        # De-dup while preserving order.
+        seen: set[Path] = set()
+        all_targets: list[Path] = []
+        for p in targets + gui_extra_targets:
+            if p in seen:
+                continue
+            seen.add(p)
+            all_targets.append(p)
+        for p in all_targets:
             try:
                 if p.is_dir():
                     shutil.rmtree(p)
@@ -634,8 +748,7 @@ class App(ttk.Frame):
                     p.unlink()
             except Exception as e:
                 messagebox.showwarning("Clean warning", f"Failed to remove {p}: {e}")
-        ensure_dirs(self.inputs_dir, self.logs_dir, self.artifacts_dir, self.provider_secrets_dir)
-        self._log_append("Workspace cleaned.\n")
+        self._log_append("Workspace cleaned (folders deleted; will be recreated on demand).\n")
 
     def _clean_build(self) -> None:
         build_dir = Path(self.build_dir_var.get()).resolve()
@@ -881,9 +994,53 @@ class App(ttk.Frame):
 
     # ---------- Validation ----------
     def _run_full_validation(self) -> None:
-        # This script is WSL/bash-oriented by design.
-        self.use_wsl_var.set(True)
-        self._run_shelllike("Full system validation", "bash scripts/full_system_validation_wsl.sh")
+        self._run_validation_target(None)
+
+    def _run_selected_execution_target(self) -> None:
+        """
+        Executes either a single validation scenario (via `--only`) or the full suite.
+        """
+        if self.runner.is_running():
+            messagebox.showwarning("Busy", "A process is already running. Cancel it first.")
+            return
+
+        choice = (self.execution_var.get() or "").strip()
+        if choice not in self.execution_targets:
+            messagebox.showerror("Invalid", f"Unknown target: {choice}")
+            return
+
+        only_key = self.execution_targets[choice]
+        self.execution_case_var.set("Case: (none)")
+        self._execution_reset_steps()
+
+        if only_key is None:
+            self._run_validation_target(None)
+            return
+
+        self._run_validation_target(only_key)
+
+    def _run_validation_target(self, only_key: Optional[str]) -> None:
+        """
+        Runs the real validation script, optionally restricted via `--only <key>`.
+        """
+        if self.runner.is_running():
+            messagebox.showwarning("Busy", "A process is already running. Cancel it first.")
+            return
+
+        # Only force WSL on Windows; when running inside WSL/Linux there is no `wsl` executable.
+        if is_windows():
+            self.use_wsl_var.set(True)
+        self._execution_reset_steps()
+
+        if only_key:
+            title = f"Validation: {only_key}"
+            safe_only = shlex.quote(only_key)
+            cmd = f"bash scripts/full_system_validation_wsl.sh --only {safe_only}"
+        else:
+            title = "Full validation suite"
+            cmd = "bash scripts/full_system_validation_wsl.sh"
+
+        self._run_shelllike(title, cmd)
 
     def _open_validation_summary(self) -> None:
         if not self.validation_summary_path.exists():
@@ -899,11 +1056,10 @@ class App(ttk.Frame):
 
     # ---------- Scenarios ----------
     def _run_selected_scenario(self) -> None:
-        scenario = self.scenario_var.get().strip()
-        if scenario not in {"normal", "insufficient_acks", "stale_ack", "replay_ack", "tampered_ack"}:
-            messagebox.showerror("Invalid", f"Unknown scenario: {scenario}")
-            return
-        self._run_scenario(scenario)
+        messagebox.showinfo(
+            "Deprecated",
+            "The old Simulation/Validation split has been removed. Use the `Execution / Testing` tab instead.",
+        )
 
     def _run_scenario(self, scenario: str) -> None:
         """

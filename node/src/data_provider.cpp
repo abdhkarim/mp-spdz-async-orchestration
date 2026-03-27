@@ -311,6 +311,13 @@ static std::string hex_point(const unsigned char p[crypto_core_ristretto255_BYTE
     return to_hex(p, crypto_core_ristretto255_BYTES);
 }
 
+static bool scalar_is_all_zero(const unsigned char s[crypto_core_ristretto255_SCALARBYTES]) {
+    for (size_t i = 0; i < crypto_core_ristretto255_SCALARBYTES; ++i) {
+        if (s[i] != 0) return false;
+    }
+    return true;
+}
+
 // OR-proof that Pedersen commitment C opens to either m0 or m1 (as scalars).
 // Transcript: e (full Fiat–Shamir challenge), e1 (second split component), s0, s1 (scalars hex).
 struct OrProof {
@@ -353,10 +360,15 @@ static OrProof prove_commitment_one_of_two(const unsigned char C[crypto_core_ris
 
     unsigned char m0G[32];
     unsigned char m1G[32];
-    if (crypto_scalarmult_ristretto255(m0G, m0_scalar, G) != 0) {
+    // 0*G is the identity point (32 zero bytes) on Ristretto255; some libsodium builds reject n=0 in scalarmult.
+    if (scalar_is_all_zero(m0_scalar)) {
+        std::memset(m0G, 0, crypto_core_ristretto255_BYTES);
+    } else if (crypto_scalarmult_ristretto255(m0G, m0_scalar, G) != 0) {
         throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(m0G) failed");
     }
-    if (crypto_scalarmult_ristretto255(m1G, m1_scalar, G) != 0) {
+    if (scalar_is_all_zero(m1_scalar)) {
+        std::memset(m1G, 0, crypto_core_ristretto255_BYTES);
+    } else if (crypto_scalarmult_ristretto255(m1G, m1_scalar, G) != 0) {
         throw std::runtime_error("prove_commitment_one_of_two: crypto_scalarmult_ristretto255(m1G) failed");
     }
 
