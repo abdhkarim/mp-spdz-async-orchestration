@@ -78,7 +78,9 @@ class WorkflowFlowchart(ttk.Frame):
     def set_step_state(self, step_key: str, state: str) -> None:
         if step_key not in self._state:
             return
-        if state not in {"idle", "running", "success", "failed", "skipped"}:
+        # Backward/forward compatibility: some parts of the repo/tests may
+        # use `succeeded` instead of `success`.
+        if state not in {"idle", "running", "success", "succeeded", "failed", "skipped"}:
             return
         self._state[step_key] = state
         self._apply_colors()
@@ -92,7 +94,7 @@ class WorkflowFlowchart(ttk.Frame):
             return ("#f8fafc", "#cbd5e1", "#6b7280")
         if state == "running":
             return ("#fff3cd", "#f0ad4e", "#7a4b00")
-        if state == "success":
+        if state in {"success", "succeeded"}:
             return ("#d1fae5", "#10b981", "#065f46")
         if state == "failed":
             return ("#fee2e2", "#ef4444", "#7f1d1d")
@@ -280,11 +282,14 @@ class ProcessRunner:
                 for line in proc.stdout:
                     self._on_line(line)
             finally:
-                rc = proc.poll()
+                # Important: `poll()` can be None if the stdout pipe closes
+                # before the process fully exits. Use `wait()` so the GUI
+                # always receives an exit event (fixes steps stuck in `running`).
+                rc = proc.wait()
                 with self._lock:
                     self._proc = None
                 self._on_state(f"Exited with code {rc}")
-                if on_exit is not None and rc is not None:
+                if on_exit is not None:
                     try:
                         on_exit(int(rc))
                     except Exception:
@@ -766,8 +771,10 @@ class App(ttk.Frame):
                 step_state = parts[1].strip()
                 if step_state == "start":
                     self._flow_step(step_key, "running")
-                elif step_state in {"success", "failed"}:
-                    self._flow_step(step_key, step_state)
+                elif step_state in {"success", "succeeded"}:
+                    self._flow_step(step_key, "succeeded")
+                elif step_state == "failed":
+                    self._flow_step(step_key, "failed")
                 return True
 
         return False
@@ -818,12 +825,12 @@ class App(ttk.Frame):
                     d = json.loads(payload)
                     rc = int(d.get("rc", 1))
                     flow_keys = list(d.get("flow_keys", []))
-                    self._flow_steps(flow_keys, "success" if rc == 0 else "failed")
+                    self._flow_steps(flow_keys, "succeeded" if rc == 0 else "failed")
                 elif kind == "seq_exit":
                     d = json.loads(payload)
                     rc = int(d.get("rc", 1))
                     flow_keys = list(d.get("flow_keys", []))
-                    self._flow_steps(flow_keys, "success" if rc == 0 else "failed")
+                    self._flow_steps(flow_keys, "succeeded" if rc == 0 else "failed")
                     if rc != 0:
                         self._sequence_active = False
                     else:

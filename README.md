@@ -99,7 +99,7 @@ mp-spdz-async-orchestration/
 ├── programs/                # .mpc (sum, avg, triple_sum, parity_sum)
 ├── scripts/                 # orchestration, validation complète
 ├── schemas/                 # schémas JSON (ACK, core set, justification)
-├── docs/                    # architecture, protocole, notes
+├── docs/                    # architecture, protocole, threat model, roadmap, type_proof
 ├── others/                  # assets (ex. architecture.png)
 ├── third_party/MP-SPDZ/     # sous-module Git — compiler semi2k-party.x
 ├── .gitmodules

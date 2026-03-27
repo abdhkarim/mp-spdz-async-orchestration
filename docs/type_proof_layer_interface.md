@@ -1,5 +1,7 @@
 # Next Protocol Layer Interface: `type_proof`
 
+Pour le modèle de menaces et les limites du prototype (consensus centralisé, hors scope), voir [`threat_model.md`](threat_model.md).
+
 ## Goal
 The current semi2k prototype validates:
 - provider file integrity/authenticity (keyed BLAKE2b proof)

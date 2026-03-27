@@ -88,3 +88,12 @@ Cette architecture permet :
 - une compréhension isolée de chaque difficulté :
   - asynchronisme avant le calcul,
   - MPC classique pendant le calcul.
+
+---
+
+## Documentation associée
+
+- [`protocol.md`](protocol.md) — protocole d’admission et core set (implémentation actuelle)
+- [`threat_model.md`](threat_model.md) — modèle de menaces du prototype
+- [`async_compute_only_plan.md`](async_compute_only_plan.md) — statut et feuille de route
+- [`type_proof_layer_interface.md`](type_proof_layer_interface.md) — interface et backends de `type_proof`

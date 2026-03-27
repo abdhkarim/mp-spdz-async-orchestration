@@ -1,84 +1,49 @@
-# Async MPC Plan (Externalize All But Computation)
+# Statut et feuille de route : MPC asynchrone et compute externalisé
 
-## Goal
+Ce document remplace l’ancien « plan spéculatif » : il reflète **l’état du dépôt** et les suites **plausibles** pour un prototype de recherche. L’objectif architectural reste : **MP-SPDZ (semi2k) comme moteur de calcul**, le reste (admission, preuves, orchestration fichier) **à l’extérieur** de MP-SPDZ.
 
-Move to an architecture where MP-SPDZ is used only as the computation engine, while all asynchronous workflow is handled externally.
+---
 
-Target split:
+## Déjà implémenté
 
-- External plane: intake, buffering, ACK evidence, consensus, orchestration, failure policy.
-- MP-SPDZ plane: run the selected computation on the decided batch.
+- **Découplage** : le nombre de soumissions provider ne fixe pas directement la topologie MP-SPDZ ; le **core set** est décidé **avant** l’exécution MPC.
+- **Chaîne d’admission réelle** :  
+  `data_provider` → `share_verifier` (ACK signé par partie) → **`consensus`** (seule autorité d’admission sur fichiers) → optionnellement `spdz_bridge` → `semi2k-party.x`.
+- **Preuve provider** : BLAKE2b keyed + contrôle de **fil décimal canonique** pour le masqué.
+- **Manifeste** : liaison `share_manifest_id` recalculée depuis les champs publics du provider ; binding utilisé pour ACKs et `type_proof`.
+- **`type_proof`** : vérifié **directement dans `consensus`** (backends dans `consensus/src/type_proof.cpp`) — **pas** de `type_ack`.
+- **ACKs** : le binaire `consensus` **exige** `--acks-dir` ; vérification des signatures (clés CN), cohérence avec manifeste et provider, **anti-replay** `(provider_id, party_index)`, **fenêtre temporelle** optionnelle (`--timeout-seconds`), **couverture complète** des `party_index` `0 … k_required-1`.
+- **Artefacts** : `core_set.txt`, `artifacts/core_set.json`, `artifacts/justification.json` ; ACKs dans le répertoire fourni à `--acks-dir`.
+- **`spdz_bridge`** : **exécution uniquement** — préparation `Player-Data`, `compile.py`, lancement **semi2k** ; pas d’admission.
+- **Interface graphique** : `project_gui.py` enchaîne les mêmes binaires que la ligne de commande.
+- **Validation** : scripts du dossier `scripts/` (ex. validation bout-en-bout sous WSL).
 
-## Current Status
+---
 
-- Done: `inputs` count is decoupled from `computation_nodes`.
-- Done: input selection (core set) is outside MP-SPDZ.
-- Done: explicit CN-signed ACK evidence (signatures vérifiées, `--timeout-seconds` et anti-replay, couverture complète des `party_index` requis en ACK mode).
-- Done: artefacts de décision auditable (`artifacts/core_set.json`, `artifacts/justification.json` en mode ACK).
-- Remaining: une unique state machine d'orchestration contrôlant le cycle de session complet (aujourd'hui géré via scripts/rounds).
+## Partiellement implémenté / prototype
 
-## Execution Plan
+- **Orchestration** : il n’y a pas une **machine d’états unique** officielle qui piloterait tout le cycle de vie ; l’enchaînement est assuré par **scripts**, la **GUI**, ou des commandes manuelles. Les états type « COLLECTING → DECIDED → RUNNING » sont **conceptuels**, pas un module unique dans le dépôt.
+- **Schémas JSON** : fichiers sous `schemas/` ; l’alignement strict schéma ↔ tous les champs runtime peut encore être resserré selon les besoins d’audit.
+- **`type_proof`** : plusieurs backends coexistent (`stub-typeproof-v1`, `semantic-schema-v1`, `proof-real-v1`). Seuls certains offrent une garantie cryptographique forte ; le dépôt reste **expérimental** sur la couche sémantique (voir README et `type_proof_layer_interface.md`).
 
-### Phase 1 - Foundation (this iteration)
+---
 
-1. Introduce machine-readable artifacts:
-   - `artifacts/acks/*.json`
-   - `artifacts/core_set.json`
-   - `artifacts/justification.json`
-2. Define JSON schemas for ACK, core set, and justification.
-3. Add an external orchestrator script with explicit states:
-   - `COLLECTING -> DECIDED -> PREPARED -> RUNNING -> DONE/FAILED`
-4. Keep current C++ binaries (`data_provider`, `consensus`, `spdz_bridge`) as execution backends.
+## Limites actuelles du prototype
 
-Deliverable:
-- One command launches a full round and writes auditable artifacts.
+- **`consensus` centralisé** : un seul processus lit `inputs/` et `--acks-dir` ; pas de protocole BFT multi-nœuds.
+- **Pas de réseau** : hypothèse typique **machine unique** ou dossiers partagés ; pas de canal authentifié end-to-end entre entités distantes dans le code.
+- **Secrets de démo** : valeur par défaut partagée pour la preuve provider si `MPC_PROVIDER_SECRET` est absent (documenté dans le README).
+- **MPC** : **semi2k uniquement** dans ce pont ; pas d’alternative `--backend` dans `spdz_bridge`.
+- **Disponibilité / reprise** : peu ou pas de politique automatisée de relance après échec MPC ou crash (hors ce que permettent scripts et opérateur).
 
-### Phase 2 - ACK-aware consensus
+---
 
-1. Add CN ACK emission (simulated first, then real).
-2. Make consensus consume ACK artifacts and enforce:
-   - distinct CNs,
-   - `>= k` valid ACKs before deadline,
-   - anti-replay checks.
-3. Produce `core_set.json` and `justification.json` directly from consensus.
+## Prochaines étapes réalistes
 
-Deliverable:
-- Core set decisions are justified by explicit ACK evidence.
+1. **Orchestrateur explicite** (script ou petit service) avec états nommés et journalisation unique pour démos et CI — sans imposer encore un déploiement distribué.
+2. **Supervision du calcul** : timeouts, capture d’erreurs `semi2k-party.x`, stratégie de retry documentée.
+3. **Durcissement des secrets** : rotation, séparation des secrets provider vs consensus, moins de valeurs par défaut en environnement « sérieux ».
+4. **Évolution de `type_proof`** : choix de backend et de registre de schémas (`schemas/type_registry.json`) alignés sur un scénario cible (ZK / SNARK complet hors scope immédiat pour ce dépôt).
+5. **Scénarios d’échec** : démos automatisées (provider manquant, ACK incomplet, timeout) déjà partiellement couvertes par les scripts ; extension possible pour la reprise après échec MPC.
 
-### Phase 3 - Compute robustness orchestration
-
-1. Add run supervision:
-   - process monitoring,
-   - timeout,
-   - controlled stop.
-2. Add rerun policy:
-   - re-decide compute set if needed,
-   - deterministic relaunch flow.
-
-Deliverable:
-- Crash/no-response during compute produces controlled recovery behavior.
-
-### Phase 4 - Compute-only PoC aligned with docs
-
-1. Implement two-program PoC:
-   - `input_store.mpc` (prepare persistent MPC memory),
-   - `compute_from_mem.mpc` with `-m old`.
-2. Trigger compute only after external consensus marks batch as ready.
-
-Deliverable:
-- Demonstrable separation between preparation and computation phases.
-
-## Acceptance Criteria
-
-- Inputs can arrive asynchronously and be buffered externally.
-- Core set is decided with explicit artifacts and reproducible logic.
-- MP-SPDZ runs with fixed computation nodes, independent of input count.
-- End-to-end run logs show state transitions and final result.
-- Failure path (at least one) is handled without silent blocking.
-
-## Short-Term Next Actions
-
-1. Use direct binaries (or the GUI) for all demos: `data_provider → share_verifier → consensus (ACK mandatory) → optional spdz_bridge`.
-2. Start storing ACK artifacts under `artifacts/acks/`.
-3. Extend consensus to read ACKs and write JSON decision artifacts.
-4. Add one scripted crash scenario for compute rerun demonstration.
+Ces pistes **complètent** le prototype actuel ; elles ne remettent pas en cause le fait que l’**admission par ACK** et le **pont execution-only** sont **déjà en place** dans le code.
